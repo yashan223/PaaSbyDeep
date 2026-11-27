@@ -2,6 +2,20 @@ import os from 'os';
 import si from 'systeminformation';
 
 /**
+ * Resolve actual used RAM bytes excluding reclaimable Linux buffers/cache.
+ */
+export function resolveUsedMemoryBytes(mem) {
+  const total = Number(mem?.total) || 0;
+  if (Number.isFinite(mem?.available) && mem.available >= 0 && total >= mem.available) {
+    return total - mem.available;
+  }
+  if (Number.isFinite(mem?.active) && mem.active >= 0) {
+    return Math.min(mem.active, total || mem.active);
+  }
+  return Number(mem?.used) || 0;
+}
+
+/**
  * Collect lightweight CPU, memory, disk, and uptime metrics.
  */
 export async function getSystemMetrics() {
@@ -21,6 +35,8 @@ export async function getSystemMetrics() {
 
   const diskPercent = disk.total > 0 ? Math.round((disk.used / disk.total) * 100) : 0;
   const cores = load.cpus?.length || os.cpus().length || 1;
+  const memUsed = resolveUsedMemoryBytes(mem);
+  const memPercent = mem.total > 0 ? Math.round((memUsed / mem.total) * 100) : 0;
 
   return {
     cpu: {
@@ -29,8 +45,10 @@ export async function getSystemMetrics() {
     },
     memory: {
       total: mem.total,
-      used: mem.used,
-      percent: mem.total > 0 ? Math.round((mem.used / mem.total) * 100) : 0,
+      used: memUsed,
+      available: mem.available,
+      buffcache: mem.buffcache || 0,
+      percent: memPercent,
     },
     disk: {
       total: disk.total,
