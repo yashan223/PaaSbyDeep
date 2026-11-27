@@ -676,6 +676,54 @@
   font-weight: 600;
 }
 
+.app-access-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--info-text);
+  font-size: 13px;
+  font-weight: 500;
+  word-break: break-all;
+}
+
+.app-access-link:hover {
+  text-decoration: underline;
+}
+
+.app-card-access {
+  display: flex;
+  align-items: center;
+}
+
+.ip-access-box {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: var(--info-bg);
+  border: 1px solid var(--info-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.ip-access-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ip-access-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
 /* ---- Live & App Logs -------------------------------------- */
 .live-logs-heading-wrap {
   display: flex;

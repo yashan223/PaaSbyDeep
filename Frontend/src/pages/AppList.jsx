@@ -1,18 +1,22 @@
 import { Link } from 'react-router-dom';
-import { Plus, Play, RotateCcw, Square, Pencil, Server } from 'lucide-react';
+import { Plus, Play, RotateCcw, Square, Pencil, Server, Globe, ExternalLink } from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
 import useApps from '../hooks/useApps';
 import { useWebSocket } from '../context/WebSocketContext';
 import { deployApp, restartApp, stopApp } from '../api/apps';
+import { getDomainSystemStatus } from '../api/domains';
+import { getPrimaryAppAccess } from '../utils/appUrl';
 import { useState, useEffect } from 'react';
 
 function AppList() {
   const { apps, setApps, loading, error, fetchApps } = useApps();
   const { subscribe } = useWebSocket();
+  const [sysStatus, setSysStatus] = useState(null);
   const [actionError, setActionError] = useState('');
 
   useEffect(() => {
     void fetchApps();
+    getDomainSystemStatus().then(setSysStatus).catch(() => {});
   }, [fetchApps]);
 
   useEffect(() => {
@@ -29,7 +33,7 @@ function AppList() {
               : a
           )
         );
-      } else if (msg.type === 'apps:changed') {
+      } else if (msg.type === 'apps:changed' || msg.type === 'domains:changed') {
         void fetchApps();
       }
     });
@@ -87,6 +91,25 @@ function AppList() {
                     <span className="project-type-pill">{app.project_type}</span>
                   )}
                 </div>
+
+                {(() => {
+                  const access = getPrimaryAppAccess(app, app.domains, sysStatus);
+                  return access ? (
+                    <div className="app-card-access">
+                      <a
+                        href={access.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="app-access-link"
+                        title={access.isDomain ? 'Open configured domain' : 'No domain added — open via IP & port'}
+                      >
+                        <Globe size={12} />
+                        <span>{access.label}</span>
+                        <ExternalLink size={11} />
+                      </a>
+                    </div>
+                  ) : null;
+                })()}
 
                 {(app.last_deployed_at || app.lastDeployedAt) && (
                   <div className="app-card-date">

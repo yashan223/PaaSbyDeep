@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Plus, Play, RotateCcw, Square, Activity, Server, AlertTriangle,
+  Plus, Play, RotateCcw, Square, Activity, Server, AlertTriangle, ExternalLink,
 } from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
 import useApps from '../hooks/useApps';
 import { useWebSocket } from '../context/WebSocketContext';
 import { deployApp, restartApp, stopApp } from '../api/apps';
 import { getSystemStats } from '../api/system';
+import { getDomainSystemStatus } from '../api/domains';
+import { getPrimaryAppAccess } from '../utils/appUrl';
 
 function formatBytes(bytes) {
   if (!Number.isFinite(bytes) || bytes < 0) return '--';
@@ -34,11 +36,13 @@ function Dashboard() {
   const { apps, setApps, loading, error, fetchApps } = useApps();
   const { connected, systemStats: wsStats, subscribe } = useWebSocket();
   const [polledStats, setPolledStats] = useState(null);
+  const [sysStatus, setSysStatus] = useState(null);
   const [actionError, setActionError] = useState('');
   const stats = wsStats || polledStats;
 
   useEffect(() => {
     void fetchApps();
+    getDomainSystemStatus().then(setSysStatus).catch(() => {});
   }, [fetchApps]);
 
   useEffect(() => {
@@ -73,7 +77,7 @@ function Dashboard() {
               : a
           )
         );
-      } else if (msg.type === 'apps:changed') {
+      } else if (msg.type === 'apps:changed' || msg.type === 'domains:changed') {
         void fetchApps();
       }
     });
@@ -204,12 +208,15 @@ function Dashboard() {
                   <th>Name</th>
                   <th>Status</th>
                   <th>Port</th>
+                  <th>Access URL</th>
                   <th>Last Deployed</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {apps.map((app) => (
+                {apps.map((app) => {
+                  const access = getPrimaryAppAccess(app, app.domains, sysStatus);
+                  return (
                   <tr key={app._id || app.id}>
                     <td>
                       <Link to={`/apps/${app._id || app.id}`} className="table-link">
@@ -218,6 +225,18 @@ function Dashboard() {
                     </td>
                     <td><StatusBadge status={app.status} /></td>
                     <td>{app.port || '—'}</td>
+                    <td>
+                      {access ? (
+                        <a
+                          href={access.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="app-access-link"
+                        >
+                          {access.label} <ExternalLink size={11} />
+                        </a>
+                      ) : '—'}
+                    </td>
                     <td>
                       {(app.last_deployed_at || app.lastDeployedAt)
                         ? new Date(app.last_deployed_at || app.lastDeployedAt).toLocaleString()
@@ -249,7 +268,8 @@ function Dashboard() {
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

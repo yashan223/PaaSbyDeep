@@ -20,6 +20,7 @@ import { getGithubStatus, createGithubWebhook } from '../api/github';
 import {
   getAppDomains, getDomainSystemStatus, createDomain, syncNginxConfig, deleteDomain,
 } from '../api/domains';
+import { buildIpAccessUrl, getPrimaryAppAccess } from '../utils/appUrl';
 
 function AppDetail() {
   const { id } = useParams();
@@ -51,6 +52,7 @@ function AppDetail() {
   const [domainInput, setDomainInput] = useState('');
   const [domainBusy, setDomainBusy] = useState(false);
   const [domainNotice, setDomainNotice] = useState('');
+  const [copiedIpUrl, setCopiedIpUrl] = useState(false);
   const [sslModalDomain, setSslModalDomain] = useState(null);
   const [configModalDomain, setConfigModalDomain] = useState(null);
   const [domainDeleteTarget, setDomainDeleteTarget] = useState(null);
@@ -273,6 +275,16 @@ function AppDetail() {
 
   const rawApiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
   const apiUrl = rawApiUrl.startsWith('/') ? `${window.location.origin}${rawApiUrl}` : rawApiUrl;
+  const ipAccessUrl = buildIpAccessUrl(app.port, domainSysStatus);
+  const primaryAccess = getPrimaryAppAccess(app, domains, domainSysStatus);
+
+  const handleCopyIpUrl = () => {
+    if (!ipAccessUrl) return;
+    navigator.clipboard?.writeText(ipAccessUrl).then(() => {
+      setCopiedIpUrl(true);
+      setTimeout(() => setCopiedIpUrl(false), 2000);
+    }).catch(() => {});
+  };
 
   const handleAutoWebhook = async () => {
     setActionError('');
@@ -410,6 +422,21 @@ function AppDetail() {
               <span className="detail-key"><Globe size={13} /> Port</span>
               <span className="detail-val">{app.port || '—'}</span>
             </div>
+            {primaryAccess && (
+              <div className="detail-row">
+                <span className="detail-key"><ExternalLink size={13} /> Access URL</span>
+                <span className="detail-val">
+                  <a
+                    href={primaryAccess.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="app-access-link"
+                  >
+                    {primaryAccess.url} <ExternalLink size={11} />
+                  </a>
+                </span>
+              </div>
+            )}
             <div className="detail-row">
               <span className="detail-key">Dockerfile</span>
               <span className="detail-val">{app.dockerfile_path || app.dockerfilePath || 'Dockerfile'}</span>
@@ -475,6 +502,32 @@ function AppDetail() {
               <Plus size={14} /> {domainBusy ? 'Adding…' : 'Add Domain'}
             </button>
           </form>
+
+          {domains.length === 0 && ipAccessUrl && (
+            <div className="ip-access-box">
+              <div className="ip-access-row">
+                <span className="ip-access-label">
+                  <Globe size={13} /> No domain configured — access via IP:
+                </span>
+                <a
+                  href={ipAccessUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="app-access-link"
+                >
+                  <code>{ipAccessUrl}</code>
+                  <ExternalLink size={12} />
+                </a>
+              </div>
+              <button
+                type="button"
+                className="btn btn-xs btn-secondary"
+                onClick={handleCopyIpUrl}
+              >
+                {copiedIpUrl ? <><Check size={11} /> Copied</> : <><Copy size={11} /> Copy URL</>}
+              </button>
+            </div>
+          )}
 
           <DnsRecordHint sysStatus={domainSysStatus} domainValue={domainInput} />
 

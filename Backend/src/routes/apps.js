@@ -35,8 +35,21 @@ function serializeApp(app, role = 'admin') {
       )
     : rawEnv;
 
+  let domains = [];
+  if (Array.isArray(rest.domains)) {
+    domains = rest.domains;
+  } else if (typeof rest.domains === 'string') {
+    try {
+      const parsed = JSON.parse(rest.domains);
+      if (Array.isArray(parsed)) domains = parsed;
+    } catch {
+      domains = [];
+    }
+  }
+
   return {
     ...rest,
+    domains,
     env_vars: envVars,
     has_github_token: Boolean(github_token),
   };
@@ -70,7 +83,12 @@ router.get('/', async (req, res) => {
     const apps = await sql`
       SELECT a.*,
         (SELECT status     FROM deployments WHERE app_id = a.id ORDER BY id DESC LIMIT 1) AS last_deployment_status,
-        (SELECT started_at FROM deployments WHERE app_id = a.id ORDER BY id DESC LIMIT 1) AS last_deployed_at
+        (SELECT started_at FROM deployments WHERE app_id = a.id ORDER BY id DESC LIMIT 1) AS last_deployed_at,
+        COALESCE(
+          (SELECT json_agg(json_build_object('id', d.id, 'domain', d.domain, 'ssl_enabled', d.ssl_enabled) ORDER BY d.created_at ASC)
+           FROM domains d WHERE d.app_id = a.id),
+          '[]'::json
+        ) AS domains
       FROM applications a
       ORDER BY a.created_at DESC
     `;
@@ -168,7 +186,12 @@ router.get('/:id', async (req, res) => {
     const rows = await sql`
       SELECT a.*,
         (SELECT status     FROM deployments WHERE app_id = a.id ORDER BY id DESC LIMIT 1) AS last_deployment_status,
-        (SELECT started_at FROM deployments WHERE app_id = a.id ORDER BY id DESC LIMIT 1) AS last_deployed_at
+        (SELECT started_at FROM deployments WHERE app_id = a.id ORDER BY id DESC LIMIT 1) AS last_deployed_at,
+        COALESCE(
+          (SELECT json_agg(json_build_object('id', d.id, 'domain', d.domain, 'ssl_enabled', d.ssl_enabled) ORDER BY d.created_at ASC)
+           FROM domains d WHERE d.app_id = a.id),
+          '[]'::json
+        ) AS domains
       FROM applications a
       WHERE a.id = ${appId}
     `;
