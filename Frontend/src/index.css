@@ -1620,6 +1620,11 @@ code {
   flex-wrap: wrap;
 }
 
+.domain-add-form .form-input,
+.domain-add-form .btn {
+  height: 38px;
+}
+
 .domain-add-field {
   display: flex;
   flex-direction: column;

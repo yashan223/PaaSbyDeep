@@ -15,16 +15,17 @@ export function resolveUsedMemoryBytes(mem) {
   return Number(mem?.used) || 0;
 }
 
-/**
- * Collect lightweight CPU, memory, disk, and uptime metrics.
- */
-export async function getSystemMetrics() {
-  const [load, mem, fsSizes] = await Promise.all([
-    si.currentLoad(),
-    si.mem(),
-    si.fsSize(),
-  ]);
+const DISK_CACHE_MS = 10000;
+let cachedDisk = { total: 0, used: 0, percent: 0 };
+let lastDiskAt = 0;
 
+async function getDiskMetrics() {
+  const now = Date.now();
+  if (now - lastDiskAt < DISK_CACHE_MS && cachedDisk.total > 0) {
+    return cachedDisk;
+  }
+
+  const fsSizes = await si.fsSize();
   const disk = fsSizes.reduce(
     (acc, fs) => ({
       total: acc.total + (fs.size || 0),
@@ -33,7 +34,25 @@ export async function getSystemMetrics() {
     { total: 0, used: 0 }
   );
 
-  const diskPercent = disk.total > 0 ? Math.round((disk.used / disk.total) * 100) : 0;
+  cachedDisk = {
+    total: disk.total,
+    used: disk.used,
+    percent: disk.total > 0 ? Math.round((disk.used / disk.total) * 100) : 0,
+  };
+  lastDiskAt = now;
+  return cachedDisk;
+}
+
+/**
+ * Collect lightweight CPU, memory, swap, disk, and uptime metrics.
+ */
+export async function getSystemMetrics() {
+  const [load, mem, disk] = await Promise.all([
+    si.currentLoad(),
+    si.mem(),
+    getDiskMetrics(),
+  ]);
+
   const cores = load.cpus?.length || os.cpus().length || 1;
   const memUsed = resolveUsedMemoryBytes(mem);
   const memPercent = mem.total > 0 ? Math.round((memUsed / mem.total) * 100) : 0;
@@ -62,11 +81,7 @@ export async function getSystemMetrics() {
       percent: memPercent,
     },
     swap,
-    disk: {
-      total: disk.total,
-      used: disk.used,
-      percent: diskPercent,
-    },
+    disk,
     uptime: Math.floor(process.uptime()),
   };
 }

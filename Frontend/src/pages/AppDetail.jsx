@@ -469,8 +469,8 @@ function AppDetail() {
                 aria-label="Custom domain"
               />
             </div>
-            <button type="submit" className="btn btn-primary btn-sm" disabled={domainBusy}>
-              <Plus size={13} /> {domainBusy ? 'Adding…' : 'Add Domain'}
+            <button type="submit" className="btn btn-primary" disabled={domainBusy}>
+              <Plus size={14} /> {domainBusy ? 'Adding…' : 'Add Domain'}
             </button>
           </form>
 

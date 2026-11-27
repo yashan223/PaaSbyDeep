@@ -31,15 +31,16 @@ function EditApp() {
     dockerfilePath: 'Dockerfile',
     port: '',
     envVars: '',
-    githubToken: '',
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
+    let active = true;
     getApp(id)
       .then((app) => {
+        if (!active) return;
         setForm({
           name: app.name || '',
           repoUrl: app.repo_url || app.repoUrl || app.repository || '',
@@ -47,11 +48,15 @@ function EditApp() {
           dockerfilePath: app.dockerfile_path || app.dockerfilePath || 'Dockerfile',
           port: app.port ? String(app.port) : '',
           envVars: envObjToText(app.env_vars || app.envVars || app.env),
-          githubToken: '',
         });
       })
-      .catch((err) => setError(err?.response?.data?.error || err?.response?.data?.message || 'Failed to load app.'))
-      .finally(() => setLoading(false));
+      .catch((err) => {
+        if (active) setError(err?.response?.data?.error || err?.response?.data?.message || 'Failed to load app.');
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
   }, [id]);
 
   const set = (field) => (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
@@ -81,7 +86,6 @@ function EditApp() {
         dockerfile_path: form.dockerfilePath.trim() || 'Dockerfile',
         port: Number(form.port),
         env_vars: form.envVars.trim() ? envTextToObj(form.envVars) : {},
-        ...(form.githubToken.trim() && { github_token: form.githubToken.trim() }),
       };
       await updateApp(id, payload);
       navigate(`/apps/${id}`);
@@ -182,21 +186,6 @@ function EditApp() {
               rows={6}
             />
             <span className="form-hint">One KEY=VALUE per line</span>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label" htmlFor="githubToken">
-              GitHub Token <span className="form-optional">(leave blank to keep existing)</span>
-            </label>
-            <input
-              id="githubToken"
-              type="password"
-              className="form-input"
-              value={form.githubToken}
-              onChange={set('githubToken')}
-              placeholder="ghp_•••• (leave blank to keep current)"
-              autoComplete="off"
-            />
           </div>
 
           <div className="form-actions">

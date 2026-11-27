@@ -7,6 +7,7 @@ import StatusBadge from '../components/StatusBadge';
 import useApps from '../hooks/useApps';
 import { useWebSocket } from '../context/WebSocketContext';
 import { deployApp, restartApp, stopApp } from '../api/apps';
+import { getSystemStats } from '../api/system';
 
 function formatBytes(bytes) {
   if (!Number.isFinite(bytes) || bytes < 0) return '--';
@@ -31,12 +32,32 @@ function StatCard({ icon, label, value, color }) {
 
 function Dashboard() {
   const { apps, setApps, loading, error, fetchApps } = useApps();
-  const { systemStats: stats, subscribe } = useWebSocket();
+  const { connected, systemStats: wsStats, subscribe } = useWebSocket();
+  const [polledStats, setPolledStats] = useState(null);
   const [actionError, setActionError] = useState('');
+  const stats = wsStats || polledStats;
 
   useEffect(() => {
     void fetchApps();
   }, [fetchApps]);
+
+  useEffect(() => {
+    if (connected) return undefined;
+    let active = true;
+    const poll = () => {
+      getSystemStats()
+        .then((data) => {
+          if (active && data) setPolledStats(data);
+        })
+        .catch(() => {});
+    };
+    poll();
+    const timer = setInterval(poll, 2000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [connected]);
 
   useEffect(() => {
     return subscribe((msg) => {

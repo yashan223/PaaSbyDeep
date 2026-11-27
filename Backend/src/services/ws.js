@@ -6,6 +6,7 @@ import { getRecentServerLogs, setServerLogListener } from './serverLogger.js';
 let wss = null;
 let statsInterval = null;
 let heartbeatInterval = null;
+let collectingStats = false;
 
 function startMetricsStream() {
   if (statsInterval) return;
@@ -15,13 +16,17 @@ function startMetricsStream() {
       stopMetricsStream();
       return;
     }
+    if (collectingStats) return;
+    collectingStats = true;
     try {
       const metrics = await getSystemMetrics();
       broadcast({ type: 'system:stats', data: metrics });
     } catch (err) {
       console.warn('[WS] Failed to collect system metrics:', err.message);
+    } finally {
+      collectingStats = false;
     }
-  }, 5000);
+  }, 1000);
 }
 
 function stopMetricsStream() {

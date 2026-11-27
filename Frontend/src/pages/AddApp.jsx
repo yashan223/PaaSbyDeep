@@ -13,7 +13,6 @@ const DEFAULT_FORM = {
   dockerfilePath: 'Dockerfile',
   port: '',
   envVars: '',
-  githubToken: '',
 };
 
 function sanitizeAppName(raw) {
@@ -211,7 +210,6 @@ function AddApp() {
         port: Number(form.port),
         env_vars: form.envVars.trim() ? envTextToObj(form.envVars) : {},
         project_type: detected?.projectType || 'auto',
-        ...(form.githubToken.trim() && { github_token: form.githubToken.trim() }),
       };
       const result = await createApp(payload);
       setCreatedApp(result.app || result);
@@ -520,26 +518,6 @@ function AddApp() {
               rows={6}
             />
             <span className="form-hint">One KEY=VALUE per line</span>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label" htmlFor="githubToken">
-              GitHub Token <span className="form-optional">(optional override)</span>
-            </label>
-            <input
-              id="githubToken"
-              type="password"
-              className="form-input"
-              value={form.githubToken}
-              onChange={set('githubToken')}
-              placeholder="ghp_••••••••"
-              autoComplete="off"
-            />
-            <span className="form-hint">
-              {ghConnected
-                ? 'Private repos will automatically use your connected GitHub account if left blank.'
-                : 'Required for private repos unless you connect your GitHub account.'}
-            </span>
           </div>
 
           <div className="form-actions">
