@@ -433,15 +433,8 @@ else
   read -r -p "Default Certbot email for future app domains (optional): " CERTBOT_EMAIL
 fi
 
-echo ""
 GITHUB_CLIENT_ID=""
 GITHUB_CLIENT_SECRET=""
-read -r -p "Configure GitHub OAuth App credentials now? (PAT works without this) [y/N]: " oauth_ans
-if [[ "${oauth_ans,,}" == "y" || "${oauth_ans,,}" == "yes" ]]; then
-  read -r -p "GitHub OAuth Client ID: " GITHUB_CLIENT_ID
-  read -r -s -p "GitHub OAuth Client Secret: " GITHUB_CLIENT_SECRET
-  echo ""
-fi
 
 CONFIGURE_UFW="false"
 if command -v ufw >/dev/null 2>&1; then
