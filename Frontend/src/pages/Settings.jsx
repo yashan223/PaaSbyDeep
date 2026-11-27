@@ -247,7 +247,6 @@ function Settings() {
                 className="form-input"
                 value={generalForm.publicUrl}
                 onChange={(e) => setGeneralForm((f) => ({ ...f, publicUrl: e.target.value }))}
-                placeholder="https://paas.yourdomain.com"
               />
               <span className="form-hint">Used automatically when auto-creating GitHub webhooks.</span>
             </div>
@@ -260,7 +259,6 @@ function Settings() {
                 className="form-input"
                 value={generalForm.certbotEmail}
                 onChange={(e) => setGeneralForm((f) => ({ ...f, certbotEmail: e.target.value }))}
-                placeholder="admin@yourdomain.com"
               />
               <span className="form-hint">Pre-fills Let&apos;s Encrypt email for SSL installations.</span>
             </div>
@@ -378,7 +376,6 @@ function Settings() {
                 className="form-input"
                 value={dashboardDomain}
                 onChange={(e) => setDashboardDomain(e.target.value)}
-                placeholder="paas.yourdomain.com"
               />
               {dashboardSslExpires && (
                 <span className="form-hint">
@@ -395,7 +392,7 @@ function Settings() {
                 className="form-input"
                 value={dashboardSslEmail}
                 onChange={(e) => setDashboardSslEmail(e.target.value)}
-                placeholder={generalForm.certbotEmail || 'admin@yourdomain.com'}
+                placeholder={generalForm.certbotEmail || ''}
               />
             </div>
 

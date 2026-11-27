@@ -241,7 +241,6 @@ function Users() {
               className="form-input"
               value={form.username}
               onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))}
-              placeholder="developer"
               autoComplete="off"
             />
           </div>

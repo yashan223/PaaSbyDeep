@@ -465,7 +465,6 @@ function AppDetail() {
                 className="form-input"
                 value={domainInput}
                 onChange={(e) => setDomainInput(e.target.value)}
-                placeholder="app.yourdomain.com"
                 aria-label="Custom domain"
               />
             </div>

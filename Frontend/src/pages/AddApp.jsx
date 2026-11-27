@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
-import { Github, Sparkles, Search, Lock, Globe, ChevronDown, X, Check } from 'lucide-react';
+import { Github, Search, Lock, Globe, ChevronDown, X, Check } from 'lucide-react';
 import { createApp } from '../api/apps';
 import { getGithubStatus, getGithubRepos, getRepoBranches, detectGithubProject } from '../api/github';
 import RepoVisibilityFilter from '../components/RepoVisibilityFilter';
@@ -415,7 +415,6 @@ function AddApp() {
                 className="form-input"
                 value={form.name}
                 onChange={set('name')}
-                placeholder="my-app"
                 pattern={"[a-zA-Z0-9\\-]+"}
                 autoFocus
               />
@@ -430,7 +429,6 @@ function AddApp() {
                 className="form-input"
                 value={form.port}
                 onChange={set('port')}
-                placeholder="3000"
                 min="1024"
                 max="65535"
               />
@@ -447,7 +445,6 @@ function AddApp() {
                 value={form.repoUrl}
                 onChange={set('repoUrl')}
                 onBlur={() => runDetection(form.repoUrl.trim(), form.branch.trim(), form.dockerfilePath.trim())}
-                placeholder="https://github.com/user/repo"
               />
               <button
                 type="button"
@@ -455,12 +452,12 @@ function AddApp() {
                 onClick={() => runDetection(form.repoUrl.trim(), form.branch.trim(), form.dockerfilePath.trim())}
                 disabled={detecting || !form.repoUrl.trim()}
               >
-                <Sparkles size={14} /> {detecting ? 'Detecting…' : 'Detect'}
+                <Search size={14} /> {detecting ? 'Detecting…' : 'Detect'}
               </button>
             </div>
             {detected && (
               <div className="detect-banner">
-                <Sparkles size={13} />
+                <Check size={13} />
                 <span>
                   Detected: <strong>{detected.label}</strong>
                   {detected.hasDockerfile
@@ -483,7 +480,6 @@ function AddApp() {
                 className="form-input"
                 value={form.branch}
                 onChange={set('branch')}
-                placeholder="main"
               />
               {branches.length > 0 && (
                 <datalist id="branch-suggestions">
@@ -502,7 +498,6 @@ function AddApp() {
                 className="form-input"
                 value={form.dockerfilePath}
                 onChange={set('dockerfilePath')}
-                placeholder="Dockerfile"
               />
             </div>
           </div>
@@ -514,7 +509,6 @@ function AddApp() {
               className="form-textarea"
               value={form.envVars}
               onChange={set('envVars')}
-              placeholder={"NODE_ENV=production\nPORT=3000\nDATABASE_URL=..."}
               rows={6}
             />
             <span className="form-hint">One KEY=VALUE per line</span>

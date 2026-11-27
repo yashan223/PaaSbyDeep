@@ -70,7 +70,6 @@ function InstallSslModalBody({ domainRecord, certbotEmailConfigured, onClose, on
               className="form-input"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="admin@yourdomain.com"
             />
             <span className="form-hint">Used only by Let&apos;s Encrypt for urgent renewal notices.</span>
           </div>

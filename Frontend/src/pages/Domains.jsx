@@ -232,7 +232,6 @@ function Domains() {
                 className="form-input"
                 value={domainInput}
                 onChange={(e) => setDomainInput(e.target.value)}
-                placeholder="app.yourdomain.com"
               />
             </div>
             <div className="domain-add-submit">

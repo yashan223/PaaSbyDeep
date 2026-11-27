@@ -117,7 +117,6 @@ function EditApp() {
                 className="form-input"
                 value={form.name}
                 onChange={set('name')}
-                placeholder="my-app"
               />
               <span className="form-hint">Alphanumeric and dashes only</span>
             </div>
@@ -130,7 +129,6 @@ function EditApp() {
                 className="form-input"
                 value={form.port}
                 onChange={set('port')}
-                placeholder="3000"
                 min="1024"
                 max="65535"
               />
@@ -145,7 +143,6 @@ function EditApp() {
               className="form-input"
               value={form.repoUrl}
               onChange={set('repoUrl')}
-              placeholder="https://github.com/user/repo"
             />
           </div>
 
@@ -158,7 +155,6 @@ function EditApp() {
                 className="form-input"
                 value={form.branch}
                 onChange={set('branch')}
-                placeholder="main"
               />
             </div>
 
@@ -170,7 +166,6 @@ function EditApp() {
                 className="form-input"
                 value={form.dockerfilePath}
                 onChange={set('dockerfilePath')}
-                placeholder="Dockerfile"
               />
             </div>
           </div>
@@ -182,7 +177,6 @@ function EditApp() {
               className="form-textarea"
               value={form.envVars}
               onChange={set('envVars')}
-              placeholder={"NODE_ENV=production\nPORT=3000"}
               rows={6}
             />
             <span className="form-hint">One KEY=VALUE per line</span>

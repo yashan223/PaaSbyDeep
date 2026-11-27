@@ -52,7 +52,6 @@ function Login() {
               className="form-input"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="admin"
               autoComplete="username"
               autoFocus
             />
@@ -67,7 +66,6 @@ function Login() {
                 className="form-input"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
                 autoComplete="current-password"
               />
               <button

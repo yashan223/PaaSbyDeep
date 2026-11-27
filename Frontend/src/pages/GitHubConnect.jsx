@@ -308,7 +308,6 @@ function GitHubConnect() {
                   className="form-input"
                   value={token}
                   onChange={(e) => setToken(e.target.value)}
-                  placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
                   autoComplete="off"
                 />
               </div>
