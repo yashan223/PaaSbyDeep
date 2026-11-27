@@ -90,8 +90,9 @@ function ResetPasswordModal({ targetUser, onClose, onSaved }) {
 
 function Users() {
   const { user: currentUser } = useAuth();
+  const isAdmin = (currentUser?.role || 'admin') === 'admin';
   const [users, setUsers] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(isAdmin);
   const [form, setForm] = useState({ username: '', password: '', role: 'operator' });
   const [creating, setCreating] = useState(false);
   const [busyId, setBusyId] = useState(null);
@@ -112,6 +113,7 @@ function Users() {
   }, []);
 
   useEffect(() => {
+    if (!isAdmin) return undefined;
     let active = true;
     getUsers()
       .then((list) => {
@@ -124,7 +126,7 @@ function Users() {
         if (active) setLoading(false);
       });
     return () => { active = false; };
-  }, []);
+  }, [isAdmin]);
 
   const handleCreate = async (e) => {
     e.preventDefault();
@@ -198,7 +200,6 @@ function Users() {
     }
   };
 
-  const isAdmin = (currentUser?.role || 'admin') === 'admin';
   if (!isAdmin) {
     return (
       <div className="page">

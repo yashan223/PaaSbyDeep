@@ -21,10 +21,14 @@ client.interceptors.request.use(
 client.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response && error.response.status === 401) {
+    const reqUrl = error.config?.url || '';
+    const isCredentialCheck = reqUrl.includes('/auth/login') || reqUrl.includes('/settings/account');
+    if (error.response && error.response.status === 401 && !isCredentialCheck) {
       localStorage.removeItem('paas_token');
       localStorage.removeItem('paas_user');
-      window.location.href = '/login';
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(error);
   }

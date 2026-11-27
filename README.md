@@ -2,6 +2,8 @@
 
 A lightweight, self-hosted DevOps platform to deploy and manage GitHub apps on a single VPS using Docker, Nginx, and Certbot.
 
+**Repository:** [https://github.com/yashan223/PaaSbyDeep](https://github.com/yashan223/PaaSbyDeep)
+
 ## Stack
 
 - **Frontend:** React 19 + Vite
@@ -22,11 +24,11 @@ A lightweight, self-hosted DevOps platform to deploy and manage GitHub apps on a
 Run the interactive auto-installer as `root` on Ubuntu (20.04/22.04/24.04) or Debian (11/12):
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/xoxod33p/aether-panel/main/install.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/yashan223/PaaSbyDeep/master/install.sh)
 ```
 
 > If logged in as a non-root `sudo` user, download and run it with `sudo`:
-> `curl -Ls https://raw.githubusercontent.com/xoxod33p/aether-panel/main/install.sh -o install.sh && sudo bash install.sh`
+> `curl -Ls https://raw.githubusercontent.com/yashan223/PaaSbyDeep/master/install.sh -o install.sh && sudo bash install.sh`
 
 The installer prompts for your preferences and sets up:
 - Node.js 20, Docker Engine, Nginx, Certbot, and PM2
@@ -36,7 +38,7 @@ The installer prompts for your preferences and sets up:
 To completely uninstall PaaSbyDeep (PM2 service, `paasbydeeep-*` Docker containers/images, Nginx configs, Certbot certs, database/tables, and app files):
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/xoxod33p/aether-panel/main/install.sh) --uninstall
+bash <(curl -Ls https://raw.githubusercontent.com/yashan223/PaaSbyDeep/master/install.sh) --uninstall
 ```
 
 Or run directly from your install directory (default `/opt/paasbydeeep`):
@@ -52,12 +54,18 @@ sudo bash /opt/paasbydeeep/install.sh --uninstall
 - Docker Engine / Docker Desktop
 - Git and a PostgreSQL or [Neon](https://console.neon.tech/) database URL
 
-### 1. Install dependencies
+### 1. Clone the repository
+```bash
+git clone https://github.com/yashan223/PaaSbyDeep.git
+cd PaaSbyDeep
+```
+
+### 2. Install dependencies
 ```bash
 npm run install:all
 ```
 
-### 2. Configure environment variables
+### 3. Configure environment variables
 ```bash
 cp Backend/.env.example Backend/.env
 cp Frontend/.env.example Frontend/.env
@@ -80,7 +88,7 @@ FRONTEND_URL=http://localhost:5173
 VITE_API_URL=http://localhost:3001/api
 ```
 
-### 3. Run
+### 4. Run
 ```bash
 # Terminal 1 — Backend (initializes PostgreSQL / Neon schema automatically)
 npm run backend

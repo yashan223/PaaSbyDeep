@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Server, Eye, EyeOff } from 'lucide-react';
+import { Eye, EyeOff } from 'lucide-react';
 import { login as loginApi } from '../api/auth';
 import { useAuth } from '../context/AuthContext';
 
@@ -36,7 +36,7 @@ function Login() {
     <div className="login-page">
       <div className="login-card">
         <div className="login-logo">
-          <Server size={32} />
+          <img src="/logo.png" alt="PaaSbyDeep" className="login-logo-img" />
           <h1>PaaSbyDeep</h1>
           <p>Self-hosted DevOps platform</p>
         </div>

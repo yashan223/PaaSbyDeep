@@ -16,7 +16,11 @@ export const restartApp = (id) => client.post(`/deploy/${id}/restart`).then((r) 
 
 export const stopApp = (id) => client.post(`/deploy/${id}/stop`).then((r) => r.data);
 
-export const getAppLogs = (id) => client.get(`/deploy/${id}/logs`).then((r) => r.data);
+export const getAppLogs = (id, deploymentId) =>
+  client.get(`/deploy/${id}/logs`, deploymentId ? { params: { deploymentId } } : undefined).then((r) => r.data);
+
+export const getContainerLogs = (id, tail = 300) =>
+  client.get(`/deploy/${id}/container-logs`, { params: { tail } }).then((r) => r.data);
 
 export const getRecentLogs = () => client.get('/deploy/recent-logs').then((r) => r.data);
 

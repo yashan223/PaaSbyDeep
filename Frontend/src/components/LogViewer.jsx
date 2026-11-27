@@ -9,20 +9,20 @@ function formatTimestamp(ts) {
   }
 }
 
-function LogViewer({ logs, className = '' }) {
-  const bottomRef = useRef(null);
+function LogViewer({ logs, className = '', emptyMessage = 'No logs available.', autoScroll = true }) {
+  const viewerRef = useRef(null);
   const viewerClass = `log-viewer${className ? ` ${className}` : ''}`;
 
   useEffect(() => {
-    if (bottomRef.current) {
-      bottomRef.current.scrollIntoView({ behavior: 'smooth' });
+    if (autoScroll && viewerRef.current) {
+      viewerRef.current.scrollTop = viewerRef.current.scrollHeight;
     }
-  }, [logs]);
+  }, [logs, autoScroll]);
 
   if (!logs || logs.length === 0) {
     return (
       <div className={`${viewerClass} log-viewer--empty`}>
-        <span>No logs available.</span>
+        <span>{emptyMessage}</span>
       </div>
     );
   }
@@ -36,13 +36,13 @@ function LogViewer({ logs, className = '' }) {
   if (lines.length === 0) {
     return (
       <div className={`${viewerClass} log-viewer--empty`}>
-        <span>No logs available.</span>
+        <span>{emptyMessage}</span>
       </div>
     );
   }
 
   return (
-    <div className={viewerClass}>
+    <div ref={viewerRef} className={viewerClass}>
       {lines.map((line, i) => {
         if (typeof line === 'string') {
           return (
@@ -60,7 +60,6 @@ function LogViewer({ logs, className = '' }) {
           </div>
         );
       })}
-      <div ref={bottomRef} />
     </div>
   );
 }

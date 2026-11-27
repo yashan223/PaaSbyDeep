@@ -15,13 +15,19 @@ const docker = new Docker();
 const SENSITIVE_PATTERNS = /TOKEN|SECRET|KEY|PASSWORD|PASSWD|PASS|CREDENTIAL|AUTH/i;
 const MAX_LOG_CHARS = 50000;
 const MAX_DEPLOYMENTS_PER_APP = 20;
+const activeDeploymentLogs = new Map();
 
-function redactSecrets(text) {
+export function getActiveDeploymentLogs(deploymentId) {
+  return activeDeploymentLogs.get(Number(deploymentId)) || '';
+}
+
+export function redactSecrets(text) {
   if (!text) return '';
   return String(text)
     .replace(/https:\/\/[^@\s]+@/gi, 'https://[REDACTED]@')
     .replace(/\b(ghp_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|glpat-[A-Za-z0-9_-]+)\b/g, '[REDACTED]')
-    .replace(/(x-access-token|oauth2):[^\s@]+/gi, '$1:[REDACTED]');
+    .replace(/(x-access-token|oauth2):[^\s@]+/gi, '$1:[REDACTED]')
+    .replace(/(Bearer\s+)[A-Za-z0-9._-]+/gi, '$1[REDACTED]');
 }
 
 function redactEnvVars(envVarsObj) {
@@ -45,6 +51,7 @@ function appendLog(logsRef, line, ctx) {
   }
   process.stdout.write(`[Deploy] ${cleanLine}\n`);
   if (ctx) {
+    activeDeploymentLogs.set(Number(ctx.deploymentId), logsRef.value);
     broadcast({
       type: 'deploy:log',
       appId: ctx.appId,
@@ -63,6 +70,7 @@ function appendRawLog(logsRef, text, ctx) {
     logsRef.value = '... [older logs truncated] ...\n' + logsRef.value.slice(-MAX_LOG_CHARS);
   }
   if (ctx) {
+    activeDeploymentLogs.set(Number(ctx.deploymentId), logsRef.value);
     broadcast({
       type: 'deploy:log',
       appId: ctx.appId,
@@ -96,33 +104,125 @@ function streamToString(stream, onChunk) {
   });
 }
 
-export async function cleanupContainer(app) {
-  const containerName = `paasbydeeep-${sanitizeName(app.name)}`;
+async function findAppContainer(app) {
+  const safeName = sanitizeName(app.name);
+  const containerName = safeName ? `paasbydeeep-${safeName}` : null;
 
   if (app.container_id) {
     try {
       const c = docker.getContainer(app.container_id);
       const info = await c.inspect();
-      if (info.State.Running) await c.stop({ t: 10 });
-      await c.remove({ force: true });
-      console.log(`[Docker] Removed container ${app.container_id}`);
-      return;
+      return { container: c, info, containerName: info.Name?.replace(/^\//, '') || containerName };
     } catch (err) {
       if (err.statusCode !== 404) {
-        console.warn(`[Docker] Warning removing container by ID: ${err.message}`);
+        throw err;
       }
     }
   }
 
+  if (containerName) {
+    try {
+      const c = docker.getContainer(containerName);
+      const info = await c.inspect();
+      return { container: c, info, containerName };
+    } catch (err) {
+      if (err.statusCode !== 404) {
+        throw err;
+      }
+    }
+  }
+
+  return null;
+}
+
+function demuxDockerLogBuffer(buffer, isTty = false) {
+  if (!buffer || buffer.length === 0) return '';
+  if (isTty || typeof buffer === 'string') {
+    return buffer.toString('utf8');
+  }
+
+  const chunks = [];
+  let offset = 0;
+  while (offset + 8 <= buffer.length) {
+    const streamType = buffer[offset];
+    const zero1 = buffer[offset + 1];
+    const zero2 = buffer[offset + 2];
+    const zero3 = buffer[offset + 3];
+    const payloadSize = buffer.readUInt32BE(offset + 4);
+
+    const validHeader = (streamType === 0 || streamType === 1 || streamType === 2)
+      && zero1 === 0 && zero2 === 0 && zero3 === 0
+      && offset + 8 + payloadSize <= buffer.length;
+
+    if (!validHeader) {
+      return buffer.toString('utf8');
+    }
+
+    chunks.push(buffer.subarray(offset + 8, offset + 8 + payloadSize).toString('utf8'));
+    offset += 8 + payloadSize;
+  }
+
+  return chunks.join('');
+}
+
+/**
+ * Fetch recent stdout/stderr runtime logs from an application's Docker container.
+ */
+export async function getContainerLogs(app, { tail = 300 } = {}) {
   try {
-    const c = docker.getContainer(containerName);
-    const info = await c.inspect();
-    if (info.State.Running) await c.stop({ t: 10 });
-    await c.remove({ force: true });
-    console.log(`[Docker] Removed container ${containerName}`);
+    const found = await findAppContainer(app);
+    if (!found) {
+      return {
+        available: false,
+        running: false,
+        status: 'not_found',
+        containerName: null,
+        logs: '',
+        reason: 'No Docker container found for this application yet.',
+      };
+    }
+
+    const { container, info, containerName } = found;
+    const rawBuffer = await container.logs({
+      stdout: true,
+      stderr: true,
+      tail,
+      timestamps: true,
+      follow: false,
+    });
+    const decoded = demuxDockerLogBuffer(rawBuffer, Boolean(info.Config?.Tty));
+    return {
+      available: true,
+      running: Boolean(info.State?.Running),
+      status: info.State?.Status || 'unknown',
+      containerName,
+      logs: redactSecrets(decoded),
+    };
+  } catch (err) {
+    return {
+      available: false,
+      running: false,
+      status: 'unavailable',
+      containerName: null,
+      logs: '',
+      reason: err.message || 'Unable to read container logs from Docker.',
+    };
+  }
+}
+
+export async function cleanupContainer(app) {
+  const safeName = sanitizeName(app.name);
+  const containerName = safeName ? `paasbydeeep-${safeName}` : app.container_id;
+
+  try {
+    const found = await findAppContainer(app);
+    if (!found) return;
+    if (found.info.State?.Running) await found.container.stop({ t: 10 });
+    await found.container.remove({ force: true });
+    console.log(`[Docker] Removed container ${found.containerName || containerName}`);
   } catch (err) {
     if (err.statusCode !== 404) {
-      console.warn(`[Docker] Warning removing container by name: ${err.message}`);
+      console.warn(`[Docker] Warning removing container ${containerName}: ${err.message}`);
     }
   }
 }
@@ -318,6 +418,7 @@ export async function deployApp(appId, deploymentId, triggeredBy, commitSha) {
 
     throw new Error(safeErrorMsg);
   } finally {
+    activeDeploymentLogs.delete(Number(deploymentId));
     try {
       await sql`
         DELETE FROM deployments

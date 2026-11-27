@@ -4,6 +4,7 @@ import { getDb } from '../db/database.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { enqueue } from '../services/deploymentQueue.js';
 import { broadcast } from '../services/ws.js';
+import { getActiveDeploymentLogs, getContainerLogs } from '../services/docker.js';
 
 const router = Router();
 router.use(authenticate);
@@ -137,22 +138,67 @@ router.get('/:id/logs', async (req, res) => {
   const appId = parseId(req.params.id);
   if (!appId) return res.status(400).json({ error: 'Invalid application ID.' });
 
+  const requestedDeploymentId = req.query.deploymentId ? parseId(req.query.deploymentId) : null;
+  if (req.query.deploymentId && !requestedDeploymentId) {
+    return res.status(400).json({ error: 'Invalid deploymentId.' });
+  }
+
   try {
     const sql = getDb();
     const rows = await sql`SELECT id FROM applications WHERE id = ${appId}`;
     if (!rows[0]) return res.status(404).json({ error: 'Application not found.' });
 
-    const deployments = await sql`
-      SELECT id, status, logs FROM deployments WHERE app_id = ${appId} ORDER BY id DESC LIMIT 1
-    `;
+    const deployments = requestedDeploymentId
+      ? await sql`
+          SELECT id, status, triggered_by, started_at, finished_at, logs
+          FROM deployments
+          WHERE app_id = ${appId} AND id = ${requestedDeploymentId}
+          LIMIT 1
+        `
+      : await sql`
+          SELECT id, status, triggered_by, started_at, finished_at, logs
+          FROM deployments
+          WHERE app_id = ${appId}
+          ORDER BY id DESC
+          LIMIT 1
+        `;
+
     if (!deployments[0]) {
       return res.json({ logs: '', message: 'No deployments found for this application.' });
     }
     const d = deployments[0];
-    return res.json({ deployment_id: d.id, status: d.status, logs: d.logs || '' });
+    const logs = d.logs || (d.status === 'running' ? getActiveDeploymentLogs(d.id) : '') || '';
+    return res.json({
+      deployment_id: d.id,
+      status: d.status,
+      triggered_by: d.triggered_by,
+      started_at: d.started_at,
+      finished_at: d.finished_at,
+      logs,
+    });
   } catch (err) {
     console.error('[Deploy] Logs error:', err.message);
     return res.status(500).json({ error: 'Failed to fetch logs.' });
+  }
+});
+
+router.get('/:id/container-logs', async (req, res) => {
+  const appId = parseId(req.params.id);
+  if (!appId) return res.status(400).json({ error: 'Invalid application ID.' });
+
+  const parsedTail = Number.parseInt(req.query.tail ?? '300', 10);
+  const tail = Number.isInteger(parsedTail) ? Math.min(Math.max(parsedTail, 10), 2000) : 300;
+
+  try {
+    const sql = getDb();
+    const rows = await sql`SELECT id, name, container_id, status FROM applications WHERE id = ${appId}`;
+    if (!rows[0]) return res.status(404).json({ error: 'Application not found.' });
+
+    const result = await getContainerLogs(rows[0], { tail });
+    return res.json(result);
+  } catch (err) {
+    console.error('[Deploy] Container logs error:', err.message);
+    return res.status(500).json({ error: 'Failed to fetch container logs.' });
   }
 });
 

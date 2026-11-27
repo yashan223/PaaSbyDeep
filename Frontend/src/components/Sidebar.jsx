@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Box, Globe, Terminal, Github, Users, Settings, LogOut, Server } from 'lucide-react';
+import { LayoutDashboard, Box, Globe, Terminal, Github, Users, Settings, LogOut } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useState, useEffect } from 'react';
 import { getGithubStatus } from '../api/github';
@@ -44,7 +44,7 @@ function Sidebar() {
   return (
     <aside className="sidebar">
       <div className="sidebar-logo">
-        <Server size={22} className="sidebar-logo-icon" />
+        <img src="/logo.png" alt={platformName} className="sidebar-logo-img" />
         <span className="sidebar-logo-text">{platformName}</span>
       </div>
 

@@ -418,7 +418,7 @@ function AddApp() {
                 value={form.name}
                 onChange={set('name')}
                 placeholder="my-app"
-                pattern="[a-zA-Z0-9-]+"
+                pattern={"[a-zA-Z0-9\\-]+"}
                 autoFocus
               />
               <span className="form-hint">Alphanumeric and dashes only</span>
