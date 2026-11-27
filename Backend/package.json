@@ -1,0 +1,29 @@
+{
+  "name": "paasbydeeep-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "dev:debug": "node --watch --inspect src/index.js",
+    "db:migrate": "node src/db/migrate.js"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^0.9.3",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dockerode": "^4.0.2",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.2.0",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.23.1",
+    "simple-git": "^3.25.0",
+    "systeminformation": "^5.22.9",
+    "tar-fs": "^3.0.5",
+    "tar-stream": "^3.1.7",
+    "ws": "^8.23.0"
+  }
+}

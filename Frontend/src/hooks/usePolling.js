@@ -1,0 +1,27 @@
+import { useEffect, useRef } from 'react';
+
+/**
+ * Calls `callback` immediately and then every `interval` ms.
+ * Stops polling on unmount or when `enabled` becomes false.
+ */
+function usePolling(callback, interval = 10000, enabled = true) {
+  const savedCallback = useRef(callback);
+
+  useEffect(() => {
+    savedCallback.current = callback;
+  }, [callback]);
+
+  useEffect(() => {
+    if (!enabled) return;
+
+    savedCallback.current();
+
+    const id = setInterval(() => {
+      savedCallback.current();
+    }, interval);
+
+    return () => clearInterval(id);
+  }, [interval, enabled]);
+}
+
+export default usePolling;

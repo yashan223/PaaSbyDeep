@@ -1,0 +1,68 @@
+import { useEffect, useRef } from 'react';
+
+function formatTimestamp(ts) {
+  if (!ts) return '';
+  try {
+    return new Date(ts).toLocaleString();
+  } catch {
+    return ts;
+  }
+}
+
+function LogViewer({ logs, className = '' }) {
+  const bottomRef = useRef(null);
+  const viewerClass = `log-viewer${className ? ` ${className}` : ''}`;
+
+  useEffect(() => {
+    if (bottomRef.current) {
+      bottomRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [logs]);
+
+  if (!logs || logs.length === 0) {
+    return (
+      <div className={`${viewerClass} log-viewer--empty`}>
+        <span>No logs available.</span>
+      </div>
+    );
+  }
+
+  const lines = Array.isArray(logs)
+    ? logs
+    : typeof logs === 'string'
+      ? logs.split(/\r?\n/).filter((line, idx, arr) => !(idx === arr.length - 1 && line === ''))
+      : [logs];
+
+  if (lines.length === 0) {
+    return (
+      <div className={`${viewerClass} log-viewer--empty`}>
+        <span>No logs available.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className={viewerClass}>
+      {lines.map((line, i) => {
+        if (typeof line === 'string') {
+          return (
+            <div key={i} className="log-line">
+              <span className="log-text">{line}</span>
+            </div>
+          );
+        }
+        return (
+          <div key={i} className="log-line">
+            {line.timestamp && (
+              <span className="log-timestamp">{formatTimestamp(line.timestamp)}</span>
+            )}
+            <span className="log-text">{line.message || line.text || JSON.stringify(line)}</span>
+          </div>
+        );
+      })}
+      <div ref={bottomRef} />
+    </div>
+  );
+}
+
+export default LogViewer;

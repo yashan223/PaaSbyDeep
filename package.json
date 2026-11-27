@@ -1,0 +1,16 @@
+{
+  "name": "paasbydeeep",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Self-hosted DevOps deployment platform",
+  "scripts": {
+    "backend": "cd Backend && npm run dev",
+    "frontend": "cd Frontend && npm run dev",
+    "backend:start": "cd Backend && npm run start",
+    "frontend:preview": "cd Frontend && npm run preview",
+    "frontend:build": "cd Frontend && npm run build",
+    "install:all": "cd Backend && npm install && cd ../Frontend && npm install",
+    "install:backend": "cd Backend && npm install",
+    "install:frontend": "cd Frontend && npm install"
+  }
+}
