@@ -696,16 +696,40 @@ if [[ -z "$DASHBOARD_DOMAIN" && -e /etc/nginx/sites-enabled/default ]]; then
 fi
 
 nginx -t
-systemctl enable --now nginx
-systemctl reload nginx
-log_ok "Nginx configured and reloaded."
+systemctl enable nginx >/dev/null 2>&1 || true
+
+# Clean up any unmanaged nginx master/worker outside systemd so systemd can bind cleanly
+if ! systemctl is-active --quiet nginx && pgrep -x nginx >/dev/null 2>&1; then
+  log_info "Stopping unmanaged nginx process before starting systemd service..."
+  nginx -s stop >/dev/null 2>&1 || pkill -x nginx >/dev/null 2>&1 || true
+  sleep 1
+fi
+
+NGINX_STARTED="false"
+if systemctl is-active --quiet nginx; then
+  if systemctl reload nginx; then
+    NGINX_STARTED="true"
+    log_ok "Nginx configured and reloaded."
+  fi
+else
+  if systemctl start nginx; then
+    NGINX_STARTED="true"
+    log_ok "Nginx configured and started."
+  fi
+fi
+
+if [[ "$NGINX_STARTED" != "true" ]]; then
+  log_warn "Nginx could not bind ports 80/443 (another service may be holding port 443):"
+  ss -tlnp '( sport = :80 or sport = :443 )' 2>/dev/null || netstat -tulpn 2>/dev/null | grep -E ':80\b|:443\b' || true
+  log_warn "Continuing backend & firewall setup. Free port 443 and run: sudo systemctl restart nginx"
+fi
 
 SSL_ACTIVE="false"
-if [[ -n "$DASHBOARD_DOMAIN" && "$INSTALL_SSL" == "true" ]]; then
+if [[ "$NGINX_STARTED" == "true" && -n "$DASHBOARD_DOMAIN" && "$INSTALL_SSL" == "true" ]]; then
   log_info "Obtaining Let's Encrypt SSL certificate for ${DASHBOARD_DOMAIN}..."
   if certbot --nginx -d "$DASHBOARD_DOMAIN" --non-interactive --agree-tos --email "$CERTBOT_EMAIL" --redirect; then
     SSL_ACTIVE="true"
-    systemctl reload nginx
+    systemctl reload nginx || true
     log_ok "SSL certificate installed for ${DASHBOARD_DOMAIN}."
   else
     log_warn "Certbot failed (ensure DNS A record for ${DASHBOARD_DOMAIN} points to ${SERVER_IP} and port 80 is open)."
@@ -765,6 +789,7 @@ echo -e "${GREEN}          PaaSbyDeep Installation Complete!${NC}"
 echo -e "${GREEN}============================================================${NC}"
 echo "  Dashboard URL    : ${PUBLIC_ORIGIN}"
 echo "  Server Public IP : ${SERVER_IP} (use for custom app DNS A records)"
+echo "  Nginx Status     : $([[ "$NGINX_STARTED" == "true" ]] && echo "Running" || echo "Port 80/443 conflict — see warning above")"
 echo "  Backend Health   : $([[ "$HEALTH_OK" == "true" ]] && echo "OK (port ${APP_PORT})" || echo "Check: pm2 logs paasbydeeep-backend")"
 echo "  Database Mode    : $([[ "$DB_CHOICE" == "1" ]] && echo "Local PostgreSQL (${PG_DB_NAME})" || echo "External / Neon DB")"
 echo "  Admin Username   : ${ADMIN_USERNAME}"
