@@ -329,11 +329,7 @@ INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_DIR}"
 INSTALL_DIR="${INSTALL_DIR%/}"
 
 DEFAULT_REPO_URL="https://github.com/yashan223/PaaSbyDeep.git"
-REPO_CLONE_URL=""
-if [[ "$HAS_LOCAL_REPO" != "true" ]]; then
-  read -r -p "Git repository URL [${DEFAULT_REPO_URL}]: " REPO_CLONE_URL
-  REPO_CLONE_URL="${REPO_CLONE_URL:-$DEFAULT_REPO_URL}"
-fi
+REPO_CLONE_URL="${REPO_CLONE_URL:-$DEFAULT_REPO_URL}"
 
 read -r -p "Backend API port [3001]: " APP_PORT
 APP_PORT="${APP_PORT:-3001}"
