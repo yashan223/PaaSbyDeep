@@ -2,8 +2,6 @@
 
 A lightweight, self-hosted DevOps platform to deploy and manage GitHub apps on a single VPS using Docker, Nginx, and Certbot.
 
-**Repository:** [https://github.com/yashan223/PaaSbyDeep](https://github.com/yashan223/PaaSbyDeep)
-
 ## Stack
 
 - **Frontend:** React 19 + Vite
