@@ -36,7 +36,6 @@ function Login() {
   return (
     <div className="login-page">
       <div className="login-bg" aria-hidden="true">
-        <div className="login-bg-grid" />
         <div className="login-bg-spotlight" />
         <div className="login-bg-beam" />
         <div className="login-bg-orb login-bg-orb--1" />

@@ -51,11 +51,10 @@
   --shadow-md: 0 8px 20px rgba(0, 0, 0, 0.45);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
   --login-card-bg: rgba(22, 27, 34, 0.86);
-  --login-grid-line: rgba(139, 148, 158, 0.08);
-  --login-orb-1: rgba(35, 134, 54, 0.24);
-  --login-orb-2: rgba(31, 111, 235, 0.24);
-  --login-orb-3: rgba(163, 113, 247, 0.16);
-  --login-spotlight: rgba(31, 111, 235, 0.12);
+  --login-orb-1: rgba(35, 134, 54, 0.34);
+  --login-orb-2: rgba(31, 111, 235, 0.32);
+  --login-orb-3: rgba(163, 113, 247, 0.22);
+  --login-spotlight: rgba(31, 111, 235, 0.14);
   --radius: 6px;
   --sidebar-width: 236px;
 }
@@ -112,9 +111,8 @@
   --shadow-md: 0 8px 20px rgba(31, 35, 40, 0.1);
   --shadow-lg: 0 16px 40px rgba(31, 35, 40, 0.14);
   --login-card-bg: rgba(255, 255, 255, 0.88);
-  --login-grid-line: rgba(31, 35, 40, 0.06);
-  --login-orb-1: rgba(26, 127, 55, 0.16);
-  --login-orb-2: rgba(9, 105, 218, 0.16);
-  --login-orb-3: rgba(130, 80, 223, 0.12);
-  --login-spotlight: rgba(9, 105, 218, 0.08);
+  --login-orb-1: rgba(26, 127, 55, 0.22);
+  --login-orb-2: rgba(9, 105, 218, 0.22);
+  --login-orb-3: rgba(130, 80, 223, 0.16);
+  --login-spotlight: rgba(9, 105, 218, 0.1);
 }
