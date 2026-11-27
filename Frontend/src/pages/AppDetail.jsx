@@ -349,14 +349,17 @@ function AppDetail() {
   return (
     <div className="page">
       <div className="page-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <Link to="/apps" className="btn btn-secondary btn-sm">
-            <ArrowLeft size={14} />
+        <div className="app-detail-header-left">
+          <Link
+            to="/apps"
+            className="btn btn-secondary app-detail-back-btn"
+            aria-label="Back to Applications"
+            title="Back to Applications"
+          >
+            <ArrowLeft size={16} />
           </Link>
-          <div>
-            <h2 className="page-heading" style={{ marginBottom: 0 }}>{app.name}</h2>
-            <StatusBadge status={app.status} />
-          </div>
+          <h2 className="page-heading app-detail-title">{app.name}</h2>
+          <StatusBadge status={app.status} />
         </div>
         <div className="action-btns">
           <button

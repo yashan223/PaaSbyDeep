@@ -1,4 +1,25 @@
 /* ---- App Detail ------------------------------------------- */
+.app-detail-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.app-detail-back-btn {
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.app-detail-title {
+  margin-bottom: 0;
+  line-height: 1.2;
+}
+
 .detail-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
