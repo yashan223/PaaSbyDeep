@@ -1,0 +1,428 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# PaaSbyDeep CLI — Manage and update your PaaSbyDeep VPS installation
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+log_info()  { echo -e "${BLUE}[INFO]${NC} $*"; }
+log_ok()    { echo -e "${GREEN}[OK]${NC} $*"; }
+log_warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+
+WEB_ROOT="/var/www/paasbydeeep"
+CONFIG_DIR="/etc/paasbydeeep"
+BIN_PATH="/usr/local/bin/paasbydeeep"
+ALIAS_PATH="/usr/local/bin/paasbydeep"
+
+resolve_install_dir() {
+  if [[ -n "${PAASBYDEEEP_DIR:-}" && -f "${PAASBYDEEEP_DIR}/Backend/package.json" ]]; then
+    echo "${PAASBYDEEEP_DIR%/}"
+    return 0
+  fi
+
+  if [[ -f "${CONFIG_DIR}/install_dir" ]]; then
+    local saved_dir
+    saved_dir="$(tr -d '\r\n' < "${CONFIG_DIR}/install_dir" | sed 's:/*$::')"
+    if [[ -n "$saved_dir" && -f "${saved_dir}/Backend/package.json" ]]; then
+      echo "$saved_dir"
+      return 0
+    fi
+  fi
+
+  local self_path script_root
+  self_path="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+  script_root="$(cd "$(dirname "$self_path")/.." 2>/dev/null && pwd || true)"
+  if [[ -n "$script_root" && -f "${script_root}/Backend/package.json" ]]; then
+    echo "$script_root"
+    return 0
+  fi
+
+  if [[ -f "/opt/paasbydeeep/Backend/package.json" ]]; then
+    echo "/opt/paasbydeeep"
+    return 0
+  fi
+
+  return 1
+}
+
+require_root() {
+  if [[ "${EUID}" -ne 0 ]]; then
+    log_error "This command requires root privileges. Run with: sudo paasbydeeep $*"
+    exit 1
+  fi
+}
+
+get_env_val() {
+  local env_file="$1"
+  local key="$2"
+  local fallback="${3:-}"
+  if [[ ! -f "$env_file" ]]; then
+    echo "$fallback"
+    return
+  fi
+  local line
+  line="$(grep -E "^${key}=" "$env_file" | tail -n 1 || true)"
+  if [[ -n "$line" ]]; then
+    echo "${line#${key}=}" | tr -d '\r'
+  else
+    echo "$fallback"
+  fi
+}
+
+ensure_symlinks() {
+  local install_dir="$1"
+  mkdir -p "$CONFIG_DIR"
+  echo "$install_dir" > "${CONFIG_DIR}/install_dir"
+  chmod +x "${install_dir}/bin/paasbydeeep" "${install_dir}/install.sh" 2>/dev/null || true
+  ln -sf "${install_dir}/bin/paasbydeeep" "$BIN_PATH"
+  ln -sf "${install_dir}/bin/paasbydeeep" "$ALIAS_PATH"
+}
+
+cmd_help() {
+  cat <<'HELP'
+PaaSbyDeep CLI
+
+Usage: paasbydeeep <command> [options]
+
+Commands:
+  update [--force]       Pull latest updates, migrate DB, rebuild Frontend, restart Backend
+  status                 Show install version, PM2, health, Nginx, DB, and app containers
+  logs [lines]           Follow PM2 backend logs (default: 100 initial lines)
+  start                  Start paasbydeeep-backend via PM2
+  stop                   Stop paasbydeeep-backend via PM2
+  restart                Restart paasbydeeep-backend via PM2
+  reset-admin            Reset or create an administrator account in the database
+  doctor                 Check Node, Docker, Nginx, ports 80/443, and DB connectivity
+  uninstall              Launch full PaaSbyDeep uninstaller
+  version                Show installed git commit and Node/PM2 versions
+  help                   Show this help message
+HELP
+}
+
+cmd_version() {
+  local install_dir
+  if ! install_dir="$(resolve_install_dir)"; then
+    log_error "Could not locate PaaSbyDeep installation directory."
+    exit 1
+  fi
+  local branch="unknown" commit="unknown"
+  if [[ -d "${install_dir}/.git" ]]; then
+    branch="$(git -C "$install_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+    commit="$(git -C "$install_dir" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  fi
+  echo "PaaSbyDeep CLI"
+  echo "  Install Dir : ${install_dir}"
+  echo "  Git Revision: ${branch} @ ${commit}"
+  echo "  Node.js     : $(node -v 2>/dev/null || echo 'not found')"
+  echo "  PM2         : $(pm2 -v 2>/dev/null || echo 'not found')"
+}
+
+cmd_update() {
+  require_root "update"
+
+  local force_reset="false"
+  for arg in "$@"; do
+    case "$arg" in
+      --force) force_reset="true" ;;
+    esac
+  done
+
+  local install_dir
+  if ! install_dir="$(resolve_install_dir)"; then
+    log_error "Could not locate PaaSbyDeep installation directory (set PAASBYDEEEP_DIR if custom)."
+    exit 1
+  fi
+
+  echo -e "${CYAN}Updating PaaSbyDeep in ${install_dir}...${NC}"
+
+  local old_rev="none" new_rev="none" branch="master"
+  if [[ -d "${install_dir}/.git" ]]; then
+    old_rev="$(git -C "$install_dir" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    branch="$(git -C "$install_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo master)"
+
+    log_info "Fetching latest changes from origin (${branch})..."
+    git -C "$install_dir" fetch origin
+
+    if [[ "$force_reset" == "true" ]]; then
+      log_warn "Force-resetting local tracked files to origin/${branch} (Backend/.env & Frontend/.env preserved)..."
+      git -C "$install_dir" reset --hard "origin/${branch}"
+    else
+      if ! git -C "$install_dir" pull --ff-only origin "$branch"; then
+        log_error "Fast-forward pull failed due to local modifications."
+        log_error "Run 'sudo paasbydeeep update --force' to discard tracked local edits and update cleanly."
+        exit 1
+      fi
+    fi
+    new_rev="$(git -C "$install_dir" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  else
+    log_warn "${install_dir} is not a git clone; skipping git pull and rebuilding existing files."
+  fi
+
+  ensure_symlinks "$install_dir"
+
+  log_info "Updating Backend dependencies..."
+  cd "${install_dir}/Backend"
+  npm install --omit=dev
+
+  log_info "Applying database migrations..."
+  npm run db:migrate
+
+  log_info "Building Frontend bundle..."
+  cd "${install_dir}/Frontend"
+  npm install
+  npm run build
+
+  mkdir -p "$WEB_ROOT"
+  find "$WEB_ROOT" -mindepth 1 -delete
+  cp -r "${install_dir}/Frontend/dist/"* "$WEB_ROOT/"
+  log_ok "Frontend updated in ${WEB_ROOT}."
+
+  log_info "Restarting Backend service via PM2..."
+  cd "$install_dir"
+  if pm2 describe paasbydeeep-backend >/dev/null 2>&1; then
+    pm2 restart paasbydeeep-backend --update-env
+  else
+    pm2 start "${install_dir}/ecosystem.config.cjs"
+  fi
+  pm2 save >/dev/null 2>&1 || true
+
+  if command -v nginx >/dev/null 2>&1 && systemctl is-active --quiet nginx; then
+    if nginx -t >/dev/null 2>&1; then
+      systemctl reload nginx || true
+    else
+      log_warn "nginx -t reported a warning; Nginx was not reloaded."
+    fi
+  fi
+
+  local app_port
+  app_port="$(get_env_val "${install_dir}/Backend/.env" "PORT" "3001")"
+  local health_ok="false"
+  for _ in {1..15}; do
+    if curl -fsS "http://127.0.0.1:${app_port}/health" >/dev/null 2>&1; then
+      health_ok="true"
+      break
+    fi
+    sleep 1
+  done
+
+  echo ""
+  log_ok "PaaSbyDeep update complete!"
+  echo "  Git Revision : ${old_rev} -> ${new_rev} (${branch})"
+  echo "  Health Check : $([[ "$health_ok" == "true" ]] && echo "OK (port ${app_port})" || echo "Check: paasbydeeep logs")"
+}
+
+cmd_status() {
+  local install_dir
+  if ! install_dir="$(resolve_install_dir)"; then
+    log_error "Could not locate PaaSbyDeep installation directory."
+    exit 1
+  fi
+
+  local app_port branch="unknown" commit="unknown"
+  app_port="$(get_env_val "${install_dir}/Backend/.env" "PORT" "3001")"
+  if [[ -d "${install_dir}/.git" ]]; then
+    branch="$(git -C "$install_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+    commit="$(git -C "$install_dir" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  fi
+
+  echo -e "${CYAN}=== PaaSbyDeep Status ===${NC}"
+  echo "  Install Dir  : ${install_dir}"
+  echo "  Revision     : ${branch} @ ${commit}"
+
+  if curl -fsS "http://127.0.0.1:${app_port}/health" >/dev/null 2>&1; then
+    echo -e "  Backend API  : ${GREEN}Healthy${NC} (127.0.0.1:${app_port})"
+  else
+    echo -e "  Backend API  : ${RED}Unreachable${NC} (127.0.0.1:${app_port})"
+  fi
+
+  if command -v nginx >/dev/null 2>&1; then
+    if systemctl is-active --quiet nginx; then
+      echo -e "  Nginx        : ${GREEN}Active${NC}"
+    else
+      echo -e "  Nginx        : ${RED}Inactive${NC}"
+    fi
+  fi
+
+  if systemctl is-active --quiet postgresql 2>/dev/null; then
+    echo -e "  PostgreSQL   : ${GREEN}Active${NC} (local)"
+  fi
+
+  echo ""
+  echo "PM2 Process:"
+  pm2 status paasbydeeep-backend 2>/dev/null || log_warn "PM2 not running or paasbydeeep-backend not found."
+
+  if command -v docker >/dev/null 2>&1; then
+    echo ""
+    echo "Deployed App Containers:"
+    docker ps --filter "name=^paasbydeeep-" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || true
+  fi
+}
+
+cmd_logs() {
+  local lines="${1:-100}"
+  pm2 logs paasbydeeep-backend --lines "$lines"
+}
+
+cmd_pm2_action() {
+  local action="$1"
+  local install_dir
+  install_dir="$(resolve_install_dir || true)"
+  case "$action" in
+    start)
+      if [[ -n "$install_dir" && -f "${install_dir}/ecosystem.config.cjs" ]]; then
+        pm2 start "${install_dir}/ecosystem.config.cjs"
+        pm2 save >/dev/null 2>&1 || true
+      else
+        pm2 start paasbydeeep-backend
+      fi
+      ;;
+    stop)    pm2 stop paasbydeeep-backend ;;
+    restart) pm2 restart paasbydeeep-backend --update-env ;;
+  esac
+}
+
+cmd_doctor() {
+  local install_dir
+  if ! install_dir="$(resolve_install_dir)"; then
+    log_error "Could not locate PaaSbyDeep installation directory."
+    exit 1
+  fi
+  local app_port
+  app_port="$(get_env_val "${install_dir}/Backend/.env" "PORT" "3001")"
+
+  echo -e "${CYAN}=== PaaSbyDeep Diagnostics ===${NC}"
+  echo "Node.js : $(node -v 2>/dev/null || echo 'MISSING')"
+  echo "NPM     : $(npm -v 2>/dev/null || echo 'MISSING')"
+  echo "PM2     : $(pm2 -v 2>/dev/null || echo 'MISSING')"
+  echo -n "Docker  : "
+  if docker info >/dev/null 2>&1; then echo "OK"; else echo "FAILED"; fi
+
+  echo -n "DB Conn : "
+  if (
+    cd "${install_dir}/Backend" && node --input-type=module -e "
+      import './src/config/env.js';
+      import { initDb, getDb, closeDb } from './src/db/database.js';
+      await initDb();
+      await getDb()\`SELECT 1\`;
+      await closeDb();
+    " >/dev/null 2>&1
+  ); then
+    echo "OK"
+  else
+    echo "FAILED"
+  fi
+
+  echo -n "Health  : "
+  if curl -fsS "http://127.0.0.1:${app_port}/health" >/dev/null 2>&1; then echo "OK (port ${app_port})"; else echo "FAILED"; fi
+
+  echo -n "Nginx   : "
+  if command -v nginx >/dev/null 2>&1; then
+    nginx -t 2>&1 | tr '\n' ' '
+    echo ""
+  else
+    echo "Not installed"
+  fi
+
+  echo "Listeners on 80/443:"
+  ss -tlnp '( sport = :80 or sport = :443 )' 2>/dev/null || true
+}
+
+cmd_reset_admin() {
+  require_root "reset-admin"
+  local install_dir
+  if ! install_dir="$(resolve_install_dir)"; then
+    log_error "Could not locate PaaSbyDeep installation directory."
+    exit 1
+  fi
+
+  local username="" pass="" pass2=""
+  while true; do
+    read -r -p "Admin username [admin]: " username
+    username="${username:-admin}"
+    if [[ "$username" =~ ^[a-zA-Z0-9._-]{3,40}$ ]]; then
+      break
+    fi
+    log_warn "Username must be 3-40 characters (letters, numbers, dot, underscore, hyphen)."
+  done
+
+  while true; do
+    read -r -s -p "New password (min 8 chars): " pass
+    echo ""
+    if (( ${#pass} < 8 || ${#pass} > 128 )); then
+      log_warn "Password must be between 8 and 128 characters."
+      continue
+    fi
+    read -r -s -p "Confirm password: " pass2
+    echo ""
+    if [[ "$pass" == "$pass2" ]]; then
+      break
+    fi
+    log_warn "Passwords do not match."
+  done
+
+  cd "${install_dir}/Backend"
+  node --input-type=module -e "
+    import './src/config/env.js';
+    import bcrypt from 'bcryptjs';
+    import { initDb, getDb, closeDb } from './src/db/database.js';
+    await initDb();
+    const sql = getDb();
+    const username = process.argv[1];
+    const hash = bcrypt.hashSync(process.argv[2], 12);
+    const existing = await sql\`SELECT id, token_version FROM users WHERE username = \${username}\`;
+    if (existing[0]) {
+      const nextTv = Number(existing[0].token_version || 1) + 1;
+      await sql\`
+        UPDATE users
+        SET password_hash = \${hash}, role = 'admin', is_active = true, token_version = \${nextTv}
+        WHERE id = \${existing[0].id}
+      \`;
+    } else {
+      await sql\`
+        INSERT INTO users (username, password_hash, role, is_active, token_version)
+        VALUES (\${username}, \${hash}, 'admin', true, 1)
+      \`;
+    }
+    await closeDb();
+  " "$username" "$pass"
+  log_ok "Admin account '${username}' updated (previous sessions revoked)."
+}
+
+cmd_uninstall() {
+  require_root "uninstall"
+  local install_dir
+  if ! install_dir="$(resolve_install_dir)"; then
+    log_error "Could not locate PaaSbyDeep installation directory."
+    exit 1
+  fi
+  exec bash "${install_dir}/install.sh" --uninstall
+}
+
+SUBCMD="${1:-help}"
+shift || true
+
+case "$SUBCMD" in
+  update|upgrade) cmd_update "$@" ;;
+  status)         cmd_status "$@" ;;
+  logs)           cmd_logs "$@" ;;
+  start)          cmd_pm2_action start ;;
+  stop)           cmd_pm2_action stop ;;
+  restart)        cmd_pm2_action restart ;;
+  doctor|check)   cmd_doctor ;;
+  reset-admin)    cmd_reset_admin ;;
+  uninstall)      cmd_uninstall ;;
+  version|-v|--version) cmd_version ;;
+  help|-h|--help) cmd_help ;;
+  *)
+    log_error "Unknown command: '${SUBCMD}'"
+    echo ""
+    cmd_help
+    exit 1
+    ;;
+esac

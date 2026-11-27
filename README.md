@@ -45,6 +45,20 @@ Or run directly from your install directory (default `/opt/paasbydeeep`):
 sudo bash /opt/paasbydeeep/install.sh --uninstall
 ```
 
+## CLI Management
+
+The installer installs the `paasbydeeep` CLI globally (`/usr/local/bin/paasbydeeep`):
+
+```bash
+sudo paasbydeeep update        # Pull latest code, migrate DB, rebuild UI & restart backend
+paasbydeeep status             # Service, health check, Nginx, DB & container overview
+paasbydeeep logs               # Follow PM2 backend logs
+paasbydeeep restart            # Restart backend service
+paasbydeeep doctor             # Check Node, Docker, Nginx, ports & DB connectivity
+sudo paasbydeeep reset-admin   # Reset or create an admin user in DB
+sudo paasbydeeep uninstall     # Remove PaaSbyDeep from the VPS
+```
+
 ## Local Development Setup
 
 ### Prerequisites

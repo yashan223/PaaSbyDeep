@@ -277,9 +277,10 @@ run_uninstall() {
     fi
   fi
 
-  # 6. Remove files, web root, and logs
-  log_info "Removing web root, logs, and ${UNINSTALL_DIR}..."
-  rm -rf /var/www/paasbydeeep /var/log/paasbydeeep
+  # 6. Remove files, CLI symlinks, web root, and logs
+  log_info "Removing CLI symlinks, web root, logs, and ${UNINSTALL_DIR}..."
+  rm -rf /var/www/paasbydeeep /var/log/paasbydeeep /etc/paasbydeeep
+  rm -f /usr/local/bin/paasbydeeep /usr/local/bin/paasbydeep
   if [[ -d "$UNINSTALL_DIR" ]]; then
     cd /
     rm -rf "$UNINSTALL_DIR"
@@ -770,6 +771,16 @@ for _ in {1..15}; do
   sleep 1
 done
 
+# ---- Install CLI Command ----------------------------------
+if [[ -f "${INSTALL_DIR}/bin/paasbydeeep" ]]; then
+  mkdir -p /etc/paasbydeeep
+  echo "$INSTALL_DIR" > /etc/paasbydeeep/install_dir
+  chmod +x "${INSTALL_DIR}/bin/paasbydeeep" "${INSTALL_DIR}/install.sh"
+  ln -sf "${INSTALL_DIR}/bin/paasbydeeep" /usr/local/bin/paasbydeeep
+  ln -sf "${INSTALL_DIR}/bin/paasbydeeep" /usr/local/bin/paasbydeep
+  log_ok "CLI installed: run 'paasbydeeep help' or 'sudo paasbydeeep update'."
+fi
+
 # ---- Firewall ---------------------------------------------
 if [[ "$CONFIGURE_UFW" == "true" ]]; then
   ufw allow 22/tcp >/dev/null || true
@@ -797,8 +808,10 @@ fi
 echo "  Webhook Secret   : ${WEBHOOK_SECRET}"
 echo "  Install Path     : ${INSTALL_DIR}"
 echo ""
-echo "  Useful commands:"
-echo "    pm2 status"
-echo "    pm2 logs paasbydeeep-backend"
-echo "    sudo bash ${INSTALL_DIR}/install.sh --uninstall"
+echo "  Useful CLI commands:"
+echo "    sudo paasbydeeep update       # Pull latest updates, migrate, rebuild & restart"
+echo "    paasbydeeep status            # Check Backend, Nginx, DB, PM2 & app containers"
+echo "    paasbydeeep logs              # Tail backend logs"
+echo "    paasbydeeep doctor            # Run diagnostics"
+echo "    sudo paasbydeeep uninstall    # Completely remove PaaSbyDeep"
 echo -e "${GREEN}============================================================${NC}"
