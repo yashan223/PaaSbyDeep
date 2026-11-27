@@ -197,36 +197,6 @@ function Domains() {
         </button>
       </div>
 
-      {sysStatus && (
-        <div className="domain-env-bar">
-          <div className="domain-env-item">
-            <span className="domain-env-label">Nginx:</span>
-            <span className={`status-badge ${sysStatus.hasNginx ? 'status-badge--running' : 'status-badge--stopped'}`}>
-              {sysStatus.hasNginx ? 'Installed' : 'Not Installed'}
-            </span>
-          </div>
-          <div className="domain-env-item">
-            <span className="domain-env-label">Certbot:</span>
-            <span className={`status-badge ${sysStatus.hasCertbot ? 'status-badge--running' : 'status-badge--stopped'}`}>
-              {sysStatus.hasCertbot ? 'Installed' : 'Not Installed'}
-            </span>
-          </div>
-          {sysStatus.hasNginx && sysStatus.platform !== 'win32' && (
-            <div className="domain-env-item">
-              <span className="domain-env-label">Permissions:</span>
-              <span className={`status-badge ${sysStatus.canManageNginx ? 'status-badge--running' : 'status-badge--pending'}`}>
-                {sysStatus.canManageNginx ? 'Ready' : 'Needs Root / Sudo'}
-              </span>
-            </div>
-          )}
-          {(!sysStatus.hasNginx || !sysStatus.hasCertbot) && (
-            <span className="domain-env-note">
-              You can manage domains and preview generated Nginx configs here; Certbot certificate issuance runs on your Linux VPS with Nginx &amp; Certbot installed.
-            </span>
-          )}
-        </div>
-      )}
-
       {error && <div className="alert alert-error" style={{ marginBottom: '16px' }}>{error}</div>}
       {notice && <div className="alert alert-success" style={{ marginBottom: '16px' }}>{notice}</div>}
 

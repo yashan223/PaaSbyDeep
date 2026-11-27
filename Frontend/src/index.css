@@ -1,4 +1,5 @@
 :root {
+  color-scheme: dark;
   --bg-primary: #0d1117;
   --bg-secondary: #161b22;
   --bg-tertiary: #21262d;
@@ -27,6 +28,29 @@
 
 html {
   font-size: 14px;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #30363d transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: #30363d;
+  border-radius: 4px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: #484f58;
 }
 
 body {
@@ -757,12 +781,12 @@ code {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(0, 0, 0, 0.65);
   z-index: 100;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 20px;
+  padding: 16px;
   animation: fade-in 0.15s ease;
 }
 
@@ -775,12 +799,23 @@ code {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-  min-width: 360px;
-  max-width: 480px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
   width: 100%;
+  max-width: 480px;
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   outline: none;
   animation: slide-up 0.15s ease;
+}
+
+.modal > form {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 @keyframes slide-up {
@@ -792,13 +827,17 @@ code {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 20px;
+  gap: 12px;
+  padding: 14px 20px;
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 .modal-title {
   font-size: 15px;
   font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .modal-close {
@@ -807,6 +846,7 @@ code {
   color: var(--text-secondary);
   cursor: pointer;
   display: flex;
+  flex-shrink: 0;
   padding: 4px;
   border-radius: 4px;
   transition: color 0.15s, background 0.15s;
@@ -822,14 +862,18 @@ code {
   color: var(--text-secondary);
   font-size: 14px;
   line-height: 1.6;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .modal-footer {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  padding: 14px 20px;
+  padding: 12px 20px;
   border-top: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 /* ---- Forms ------------------------------------------------ */
@@ -1581,7 +1625,7 @@ code {
 }
 
 .modal--wide {
-  max-width: 660px;
+  max-width: 720px;
 }
 
 .domain-env-bar {
@@ -1667,7 +1711,7 @@ code {
   font-size: 11px;
   line-height: 1.5;
   color: #c9d1d9;
-  max-height: 220px;
+  max-height: 190px;
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;

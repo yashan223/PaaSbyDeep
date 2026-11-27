@@ -74,14 +74,14 @@ function GitHubConnect() {
     try {
       const data = await getGithubStatus();
       setStatus(data);
+      setLoading(false);
       if (data.connected) {
-        await loadRepos();
+        void loadRepos();
       } else {
         setRepos([]);
       }
     } catch (err) {
       setError(err?.response?.data?.error || 'Failed to check GitHub connection.');
-    } finally {
       setLoading(false);
     }
   }, [loadRepos]);
@@ -92,26 +92,29 @@ function GitHubConnect() {
       setSearchParams({}, { replace: true });
     }
     getGithubStatus()
-      .then(async (data) => {
+      .then((data) => {
         if (!active) return;
         setStatus(data);
+        setLoading(false);
         if (data.connected) {
           setReposLoading(true);
-          try {
-            const list = await getGithubRepos();
-            if (active) setRepos(Array.isArray(list) ? list : []);
-          } catch (err) {
-            if (active) setError(err?.response?.data?.error || 'Failed to load repositories from GitHub.');
-          } finally {
-            if (active) setReposLoading(false);
-          }
+          getGithubRepos()
+            .then((list) => {
+              if (active) setRepos(Array.isArray(list) ? list : []);
+            })
+            .catch((err) => {
+              if (active) setError(err?.response?.data?.error || 'Failed to load repositories from GitHub.');
+            })
+            .finally(() => {
+              if (active) setReposLoading(false);
+            });
         }
       })
       .catch((err) => {
-        if (active) setError(err?.response?.data?.error || 'Failed to check GitHub connection.');
-      })
-      .finally(() => {
-        if (active) setLoading(false);
+        if (active) {
+          setError(err?.response?.data?.error || 'Failed to check GitHub connection.');
+          setLoading(false);
+        }
       });
     return () => { active = false; };
   }, [searchParams, setSearchParams]);
