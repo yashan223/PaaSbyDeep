@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Eye, EyeOff } from 'lucide-react';
 import { login as loginApi } from '../api/auth';
 import { useAuth } from '../context/AuthContext';
+import ThemeToggle from '../components/ThemeToggle';
 
 function Login() {
   const [username, setUsername] = useState('');
@@ -34,6 +35,17 @@ function Login() {
 
   return (
     <div className="login-page">
+      <div className="login-bg" aria-hidden="true">
+        <div className="login-bg-grid" />
+        <div className="login-bg-spotlight" />
+        <div className="login-bg-beam" />
+        <div className="login-bg-orb login-bg-orb--1" />
+        <div className="login-bg-orb login-bg-orb--2" />
+        <div className="login-bg-orb login-bg-orb--3" />
+      </div>
+
+      <ThemeToggle className="login-theme-toggle" />
+
       <div className="login-card">
         <div className="login-logo">
           <img src="/logo.png" alt="PaaSbyDeep" className="login-logo-img" />

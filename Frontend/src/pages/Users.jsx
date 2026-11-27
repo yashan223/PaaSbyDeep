@@ -220,7 +220,7 @@ function Users() {
 
       <div className="domain-env-bar">
         <div className="domain-env-item">
-          <Shield size={13} style={{ color: '#58a6ff' }} />
+          <Shield size={13} style={{ color: 'var(--info-text)' }} />
           <span className="domain-env-note">
             <strong>Admin:</strong> Full platform &amp; user control · <strong>Operator:</strong> Deploy apps, domains &amp; SSL · <strong>Viewer:</strong> Read-only access (secrets masked)
           </span>

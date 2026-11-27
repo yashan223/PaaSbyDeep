@@ -1,0 +1,58 @@
+/* ---- Responsive ------------------------------------------- */
+@media (max-width: 768px) {
+  .github-connect-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .layout-main {
+    margin-left: 0;
+  }
+
+  .sidebar {
+    display: none;
+  }
+
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .form-row {
+    grid-template-columns: 1fr;
+  }
+
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .action-btns {
+    flex-wrap: wrap;
+  }
+
+  .stat-cards {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  .page {
+    padding: 16px;
+  }
+
+  .stat-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .login-card {
+    padding: 28px 20px;
+  }
+
+  .login-theme-toggle {
+    top: 14px;
+    right: 14px;
+  }
+
+  .app-card-edit-btn {
+    margin-left: 0;
+  }
+}

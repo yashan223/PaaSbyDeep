@@ -1,0 +1,215 @@
+/* ---- Login Page & Background Effects ------------------------ */
+.login-page {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-primary);
+  padding: 20px;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.login-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.login-bg-grid {
+  position: absolute;
+  inset: -44px;
+  background-image:
+    linear-gradient(to right, var(--login-grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--login-grid-line) 1px, transparent 1px);
+  background-size: 44px 44px;
+  -webkit-mask-image: radial-gradient(ellipse 76% 72% at 50% 50%, #000 32%, transparent 100%);
+  mask-image: radial-gradient(ellipse 76% 72% at 50% 50%, #000 32%, transparent 100%);
+  animation: login-grid-drift 28s linear infinite;
+}
+
+.login-bg-spotlight {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle 540px at 50% 48%, var(--login-spotlight), transparent 70%);
+}
+
+.login-bg-beam {
+  position: absolute;
+  top: -35%;
+  left: -25%;
+  width: 150%;
+  height: 170%;
+  background: linear-gradient(
+    115deg,
+    transparent 35%,
+    var(--login-spotlight) 50%,
+    transparent 65%
+  );
+  opacity: 0.7;
+  animation: login-beam-sweep 18s ease-in-out infinite alternate;
+}
+
+.login-bg-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(78px);
+  will-change: transform, opacity;
+}
+
+.login-bg-orb--1 {
+  width: 480px;
+  height: 480px;
+  top: -12%;
+  left: -8%;
+  background: radial-gradient(circle, var(--login-orb-1) 0%, transparent 72%);
+  animation: login-orb-float-a 16s ease-in-out infinite alternate;
+}
+
+.login-bg-orb--2 {
+  width: 520px;
+  height: 520px;
+  bottom: -14%;
+  right: -10%;
+  background: radial-gradient(circle, var(--login-orb-2) 0%, transparent 72%);
+  animation: login-orb-float-b 20s ease-in-out infinite alternate;
+}
+
+.login-bg-orb--3 {
+  width: 360px;
+  height: 360px;
+  top: 22%;
+  right: 12%;
+  background: radial-gradient(circle, var(--login-orb-3) 0%, transparent 72%);
+  animation: login-orb-float-c 14s ease-in-out infinite alternate;
+}
+
+@keyframes login-grid-drift {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(44px, 44px, 0);
+  }
+}
+
+@keyframes login-beam-sweep {
+  0% {
+    transform: translate3d(-6%, -3%, 0) rotate(-3deg);
+    opacity: 0.45;
+  }
+  100% {
+    transform: translate3d(6%, 3%, 0) rotate(3deg);
+    opacity: 0.8;
+  }
+}
+
+@keyframes login-orb-float-a {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0.8;
+  }
+  100% {
+    transform: translate3d(90px, 60px, 0) scale(1.12);
+    opacity: 1;
+  }
+}
+
+@keyframes login-orb-float-b {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1.05);
+    opacity: 0.8;
+  }
+  100% {
+    transform: translate3d(-100px, -65px, 0) scale(0.95);
+    opacity: 1;
+  }
+}
+
+@keyframes login-orb-float-c {
+  0% {
+    transform: translate3d(0, 0, 0) scale(0.95);
+    opacity: 0.65;
+  }
+  100% {
+    transform: translate3d(-65px, 55px, 0) scale(1.1);
+    opacity: 0.95;
+  }
+}
+
+.login-theme-toggle {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 2;
+  background: var(--login-card-bg);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.login-card {
+  position: relative;
+  z-index: 1;
+  background: var(--login-card-bg);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 42px 36px;
+  width: 100%;
+  max-width: 430px;
+  box-shadow: var(--shadow-lg);
+}
+
+.login-logo {
+  text-align: center;
+  margin-bottom: 28px;
+  color: var(--accent-hover);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.login-logo-img {
+  width: 128px;
+  height: 84px;
+  object-fit: contain;
+  display: block;
+}
+
+.login-logo h1 {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.login-logo p {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.login-form .form-group {
+  margin-bottom: 14px;
+}
+
+.login-form .alert {
+  margin-bottom: 14px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-bg-grid,
+  .login-bg-beam,
+  .login-bg-orb {
+    animation: none;
+  }
+}

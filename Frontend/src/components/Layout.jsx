@@ -1,5 +1,6 @@
 import { Outlet, useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar';
+import ThemeToggle from './ThemeToggle';
 
 const pageTitles = {
   '/': 'Dashboard',
@@ -29,6 +30,9 @@ function Layout() {
       <div className="layout-main">
         <header className="layout-header">
           <h1 className="layout-title">{title}</h1>
+          <div className="layout-header-actions">
+            <ThemeToggle />
+          </div>
         </header>
         <main className="layout-content">
           <Outlet />

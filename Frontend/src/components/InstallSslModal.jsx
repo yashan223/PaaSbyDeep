@@ -42,7 +42,7 @@ function InstallSslModalBody({ domainRecord, certbotEmailConfigured, onClose, on
     <div className="modal modal--wide" onClick={(e) => e.stopPropagation()}>
       <div className="modal-header">
         <h3 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <ShieldCheck size={17} style={{ color: '#3fb950' }} />
+          <ShieldCheck size={17} style={{ color: 'var(--success-text)' }} />
           Certbot SSL Installer — {domainRecord.domain}
         </h3>
         <button className="modal-close" onClick={onClose} aria-label="Close">

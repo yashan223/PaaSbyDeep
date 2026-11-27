@@ -113,7 +113,7 @@ function Dashboard() {
           icon={<Activity size={22} />}
           label="Running"
           value={runningApps}
-          color="#3fb950"
+          color="var(--success-text)"
         />
         <StatCard
           icon={<AlertTriangle size={22} />}

@@ -439,7 +439,7 @@ function AppDetail() {
               >
                 <Github size={13} /> {webhookBusy ? 'Adding Webhook…' : 'Auto-Add Webhook on GitHub'}
               </button>
-              {webhookMsg && <p className="detail-hint" style={{ color: '#3fb950' }}>{webhookMsg}</p>}
+              {webhookMsg && <p className="detail-hint" style={{ color: 'var(--success-text)' }}>{webhookMsg}</p>}
             </div>
           )}
         </div>
