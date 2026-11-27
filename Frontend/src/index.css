@@ -484,6 +484,10 @@ code {
   background: var(--info);
 }
 
+.resource-fill--swap {
+  background: #a371f7;
+}
+
 .resource-fill--disk {
   background: var(--warning);
 }

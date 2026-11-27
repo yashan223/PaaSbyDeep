@@ -38,6 +38,17 @@ export async function getSystemMetrics() {
   const memUsed = resolveUsedMemoryBytes(mem);
   const memPercent = mem.total > 0 ? Math.round((memUsed / mem.total) * 100) : 0;
 
+  const swapTotal = Number(mem.swaptotal) || 0;
+  const swapUsed = Math.max(0, Math.min(Number(mem.swapused) || 0, swapTotal));
+  const swap = swapTotal > 0
+    ? {
+        total: swapTotal,
+        used: swapUsed,
+        free: Number(mem.swapfree) || Math.max(0, swapTotal - swapUsed),
+        percent: Math.round((swapUsed / swapTotal) * 100),
+      }
+    : null;
+
   return {
     cpu: {
       load: Math.round(load.currentLoad * 10) / 10,
@@ -50,6 +61,7 @@ export async function getSystemMetrics() {
       buffcache: mem.buffcache || 0,
       percent: memPercent,
     },
+    swap,
     disk: {
       total: disk.total,
       used: disk.used,

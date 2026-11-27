@@ -99,7 +99,8 @@ Commands:
   restart                Restart paasbydeeep-backend via PM2
   reset-admin            Reset or create an administrator account in the database
   doctor                 Check Node, Docker, Nginx, ports 80/443, and DB connectivity
-  uninstall              Launch full PaaSbyDeep uninstaller
+  uninstall [--yes] [--purge-deps]
+                         Remove PaaSbyDeep (single confirmation; skip with --yes)
   version                Show installed git commit and Node/PM2 versions
   help                   Show this help message
 HELP
@@ -401,7 +402,7 @@ cmd_uninstall() {
     log_error "Could not locate PaaSbyDeep installation directory."
     exit 1
   fi
-  exec bash "${install_dir}/install.sh" --uninstall
+  exec bash "${install_dir}/install.sh" --uninstall "$@"
 }
 
 SUBCMD="${1:-help}"
@@ -416,7 +417,7 @@ case "$SUBCMD" in
   restart)        cmd_pm2_action restart ;;
   doctor|check)   cmd_doctor ;;
   reset-admin)    cmd_reset_admin ;;
-  uninstall)      cmd_uninstall ;;
+  uninstall)      cmd_uninstall "$@" ;;
   version|-v|--version) cmd_version ;;
   help|-h|--help) cmd_help ;;
   *)

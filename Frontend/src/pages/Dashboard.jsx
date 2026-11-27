@@ -114,49 +114,47 @@ function Dashboard() {
           ? `${formatBytes(stats.memory.used)} / ${formatBytes(stats.memory.total)}`
           : null;
 
+        const hasSwap = Boolean(stats.swap && stats.swap.total > 0);
+        const swapPercent = stats.swap?.percent ?? 0;
+        const swapDetail = hasSwap
+          ? `${formatBytes(stats.swap.used)} / ${formatBytes(stats.swap.total)}`
+          : null;
+
         const diskPercent = stats.disk?.percent ?? stats.diskPercent ?? stats.disk ?? 0;
         const diskDetail = stats.disk?.total
           ? `${formatBytes(stats.disk.used)} / ${formatBytes(stats.disk.total)}`
           : null;
 
+        const resources = [
+          { key: 'cpu', label: 'CPU', detail: cpuDetail, percent: cpuLoad, fillClass: '' },
+          { key: 'ram', label: 'RAM', detail: memDetail, percent: memPercent, fillClass: 'resource-fill--ram' },
+          ...(hasSwap
+            ? [{ key: 'swap', label: 'Swap', detail: swapDetail, percent: swapPercent, fillClass: 'resource-fill--swap' }]
+            : []),
+          ...(stats.disk !== undefined
+            ? [{ key: 'disk', label: 'Disk', detail: diskDetail, percent: diskPercent, fillClass: 'resource-fill--disk' }]
+            : []),
+        ];
+
         return (
           <div className="section">
             <h3 className="section-title">Server Resources</h3>
             <div className="resource-cards">
-              <div className="resource-card">
-                <div className="resource-header">
-                  <span className="resource-label">CPU</span>
-                  <span className="resource-detail">{cpuDetail}</span>
-                  <span className="resource-value">{cpuLoad}%</span>
-                </div>
-                <div className="resource-bar">
-                  <div className="resource-fill" style={{ width: `${Math.min(cpuLoad, 100)}%` }} />
-                </div>
-              </div>
-
-              <div className="resource-card">
-                <div className="resource-header">
-                  <span className="resource-label">RAM</span>
-                  {memDetail && <span className="resource-detail">{memDetail}</span>}
-                  <span className="resource-value">{memPercent}%</span>
-                </div>
-                <div className="resource-bar">
-                  <div className="resource-fill resource-fill--ram" style={{ width: `${Math.min(memPercent, 100)}%` }} />
-                </div>
-              </div>
-
-              {stats.disk !== undefined && (
-                <div className="resource-card">
+              {resources.map((res) => (
+                <div key={res.key} className="resource-card">
                   <div className="resource-header">
-                    <span className="resource-label">Disk</span>
-                    {diskDetail && <span className="resource-detail">{diskDetail}</span>}
-                    <span className="resource-value">{diskPercent}%</span>
+                    <span className="resource-label">{res.label}</span>
+                    {res.detail && <span className="resource-detail">{res.detail}</span>}
+                    <span className="resource-value">{res.percent}%</span>
                   </div>
                   <div className="resource-bar">
-                    <div className="resource-fill resource-fill--disk" style={{ width: `${Math.min(diskPercent, 100)}%` }} />
+                    <div
+                      className={`resource-fill${res.fillClass ? ` ${res.fillClass}` : ''}`}
+                      style={{ width: `${Math.min(res.percent, 100)}%` }}
+                    />
                   </div>
                 </div>
-              )}
+              ))}
             </div>
           </div>
         );

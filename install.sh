@@ -35,7 +35,23 @@ if [[ "$OS_ID" != "ubuntu" && "$OS_ID" != "debian" ]]; then
   exit 1
 fi
 
-if [[ ! -t 0 ]]; then
+MODE=""
+AUTO_YES="false"
+PURGE_DEPS="false"
+for arg in "$@"; do
+  case "$arg" in
+    --uninstall|-u) MODE="uninstall" ;;
+    --install|-i)   MODE="install" ;;
+    --yes|-y)       AUTO_YES="true" ;;
+    --purge-deps)   PURGE_DEPS="true" ;;
+    --help|-h)
+      echo "Usage: sudo bash install.sh [--install | --uninstall] [--yes] [--purge-deps]"
+      exit 0
+      ;;
+  esac
+done
+
+if [[ ! -t 0 && ! ( "$MODE" == "uninstall" && "$AUTO_YES" == "true" ) ]]; then
   log_error "Interactive terminal required for user prompts. Run with: sudo bash install.sh"
   exit 1
 fi
@@ -45,18 +61,6 @@ HAS_LOCAL_REPO="false"
 if [[ -f "$SCRIPT_DIR/Backend/package.json" && -f "$SCRIPT_DIR/Frontend/package.json" ]]; then
   HAS_LOCAL_REPO="true"
 fi
-
-MODE=""
-for arg in "$@"; do
-  case "$arg" in
-    --uninstall|-u) MODE="uninstall" ;;
-    --install|-i)   MODE="install" ;;
-    --help|-h)
-      echo "Usage: sudo bash install.sh [--install | --uninstall]"
-      exit 0
-      ;;
-  esac
-done
 
 echo -e "${CYAN}"
 cat <<'BANNER'
@@ -88,26 +92,40 @@ fi
 # UNINSTALL MODE
 # ============================================================
 run_uninstall() {
-  local DEFAULT_DIR="/opt/paasbydeeep"
-  if [[ "$HAS_LOCAL_REPO" == "true" ]]; then
-    DEFAULT_DIR="$SCRIPT_DIR"
+  local UNINSTALL_DIR="/opt/paasbydeeep"
+  if [[ -n "${PAASBYDEEEP_DIR:-}" && -d "${PAASBYDEEEP_DIR}" ]]; then
+    UNINSTALL_DIR="${PAASBYDEEEP_DIR%/}"
+  elif [[ -f /etc/paasbydeeep/install_dir ]]; then
+    local saved_dir
+    saved_dir="$(tr -d '\r\n' < /etc/paasbydeeep/install_dir | sed 's:/*$::')"
+    [[ -n "$saved_dir" ]] && UNINSTALL_DIR="$saved_dir"
+  elif [[ "$HAS_LOCAL_REPO" == "true" ]]; then
+    UNINSTALL_DIR="$SCRIPT_DIR"
   fi
-
-  echo ""
-  read -r -p "PaaSbyDeep install directory to remove [${DEFAULT_DIR}]: " UNINSTALL_DIR
-  UNINSTALL_DIR="${UNINSTALL_DIR:-$DEFAULT_DIR}"
-  UNINSTALL_DIR="${UNINSTALL_DIR%/}"
 
   if [[ -z "$UNINSTALL_DIR" || "$UNINSTALL_DIR" == "/" || "$UNINSTALL_DIR" == "/root" || "$UNINSTALL_DIR" == "/home" || "$UNINSTALL_DIR" == "/opt" || "$UNINSTALL_DIR" == "/var" || "$UNINSTALL_DIR" == "/etc" || "$UNINSTALL_DIR" == "/usr" ]]; then
     log_error "Refusing unsafe uninstall path: '${UNINSTALL_DIR}'."
     exit 1
   fi
 
-  echo -e "${YELLOW}WARNING: This will stop PaaSbyDeep, delete all paasbydeeep-* Docker containers/images, Nginx site configs, logs, /var/www/paasbydeeep, and ${UNINSTALL_DIR}.${NC}"
-  read -r -p "Type 'uninstall' to confirm: " confirm_text
-  if [[ "$confirm_text" != "uninstall" ]]; then
-    log_info "Uninstall cancelled."
-    exit 0
+  echo ""
+  echo -e "${YELLOW}This will completely remove PaaSbyDeep from: ${UNINSTALL_DIR}${NC}"
+  echo "  - Stop & delete PM2 service (paasbydeeep-backend)"
+  echo "  - Delete all paasbydeeep-* Docker containers & images"
+  echo "  - Remove PaaSbyDeep Nginx configs & Certbot SSL certs"
+  echo "  - Drop PaaSbyDeep database / tables"
+  echo "  - Remove CLI (/usr/local/bin/paasbydeeep), /var/www/paasbydeeep, logs & ${UNINSTALL_DIR}"
+  if [[ "$PURGE_DEPS" == "true" ]]; then
+    echo "  - Purge PM2, Nginx, Certbot, Docker Engine, and local PostgreSQL packages"
+  fi
+
+  if [[ "$AUTO_YES" != "true" ]]; then
+    echo ""
+    read -r -p "Proceed with uninstall? [y/N]: " confirm_ans
+    if [[ "${confirm_ans,,}" != "y" && "${confirm_ans,,}" != "yes" ]]; then
+      log_info "Uninstall cancelled."
+      exit 0
+    fi
   fi
 
   # Collect configured domains & DB URL before deleting files
@@ -211,17 +229,13 @@ run_uninstall() {
 
   # 4. Remove Certbot SSL certificates for PaaSbyDeep domains
   if (( ${#UNIQUE_DOMAINS[@]} > 0 )) && command -v certbot >/dev/null 2>&1; then
-    echo ""
-    read -r -p "Delete Let's Encrypt SSL certificates for (${UNIQUE_DOMAINS[*]})? [Y/n]: " del_certs
-    del_certs="${del_certs:-Y}"
-    if [[ "${del_certs,,}" == "y" || "${del_certs,,}" == "yes" ]]; then
-      for dom in "${UNIQUE_DOMAINS[@]}"; do
-        if [[ -d "/etc/letsencrypt/live/${dom}" ]]; then
-          certbot delete --non-interactive --cert-name "$dom" >/dev/null 2>&1 || true
-        fi
-      done
-      log_ok "Removed Certbot certificates for PaaSbyDeep domains."
-    fi
+    log_info "Removing Let's Encrypt SSL certificates for (${UNIQUE_DOMAINS[*]})..."
+    for dom in "${UNIQUE_DOMAINS[@]}"; do
+      if [[ -d "/etc/letsencrypt/live/${dom}" ]]; then
+        certbot delete --non-interactive --cert-name "$dom" >/dev/null 2>&1 || true
+      fi
+    done
+    log_ok "Removed Certbot certificates for PaaSbyDeep domains."
   fi
 
   # 5. Clean up Database (Local PostgreSQL or External / Neon DB tables)
@@ -237,10 +251,8 @@ run_uninstall() {
     )
 
     if [[ "$DB_HOST" == "127.0.0.1" || "$DB_HOST" == "localhost" ]]; then
-      echo ""
-      read -r -p "Drop local PostgreSQL database '${DB_NAME}' and role '${DB_USER}'? [Y/n]: " drop_local_db
-      drop_local_db="${drop_local_db:-Y}"
-      if [[ "${drop_local_db,,}" == "y" || "${drop_local_db,,}" == "yes" ]] && command -v psql >/dev/null 2>&1; then
+      if command -v psql >/dev/null 2>&1; then
+        log_info "Dropping local PostgreSQL database '${DB_NAME}' and role '${DB_USER}'..."
         if [[ "$DB_NAME" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
           su - postgres -c "psql -v ON_ERROR_STOP=0 -c \"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='${DB_NAME}' AND pid <> pg_backend_pid();\"" >/dev/null 2>&1 || true
           su - postgres -c "psql -v ON_ERROR_STOP=0 -c \"DROP DATABASE IF EXISTS ${DB_NAME};\"" >/dev/null 2>&1 || true
@@ -251,29 +263,25 @@ run_uninstall() {
         log_ok "Dropped local PostgreSQL database and role."
       fi
 
-      read -r -p "Purge local PostgreSQL server packages too? [y/N]: " purge_pg
-      if [[ "${purge_pg,,}" == "y" || "${purge_pg,,}" == "yes" ]]; then
+      if [[ "$PURGE_DEPS" == "true" ]]; then
         systemctl stop postgresql >/dev/null 2>&1 || true
         DEBIAN_FRONTEND=noninteractive apt-get purge -y 'postgresql*' >/dev/null 2>&1 || true
         apt-get autoremove -y >/dev/null 2>&1 || true
         rm -rf /etc/postgresql /var/lib/postgresql
         log_ok "PostgreSQL server purged."
       fi
-    else
-      echo ""
-      read -r -p "Drop all PaaSbyDeep tables from external/Neon database (${DB_HOST})? [y/N]: " drop_ext_db
-      if [[ "${drop_ext_db,,}" == "y" || "${drop_ext_db,,}" == "yes" ]] && [[ -d "${UNINSTALL_DIR}/Backend/node_modules" ]]; then
-        (
-          cd "${UNINSTALL_DIR}/Backend" && node --input-type=module -e "
-            import './src/config/env.js';
-            import { initDb, getDb, closeDb } from './src/db/database.js';
-            await initDb();
-            const sql = getDb();
-            await sql\`DROP TABLE IF EXISTS domains, deployments, github_connections, applications, platform_settings, users CASCADE\`;
-            await closeDb();
-          "
-        ) && log_ok "Dropped PaaSbyDeep tables from external database." || log_warn "Could not drop external tables automatically."
-      fi
+    elif [[ -d "${UNINSTALL_DIR}/Backend/node_modules" ]]; then
+      log_info "Dropping PaaSbyDeep tables from database (${DB_HOST})..."
+      (
+        cd "${UNINSTALL_DIR}/Backend" && node --input-type=module -e "
+          import './src/config/env.js';
+          import { initDb, getDb, closeDb } from './src/db/database.js';
+          await initDb();
+          const sql = getDb();
+          await sql\`DROP TABLE IF EXISTS domains, deployments, github_connections, applications, platform_settings, users CASCADE\`;
+          await closeDb();
+        "
+      ) && log_ok "Dropped PaaSbyDeep tables from external database." || log_warn "Could not drop external tables automatically."
     fi
   fi
 
@@ -287,23 +295,15 @@ run_uninstall() {
   fi
   log_ok "Removed PaaSbyDeep files and directories."
 
-  # 7. Optional cleanup of shared runtime packages
-  echo ""
-  read -r -p "Also uninstall PM2, Nginx, and Certbot packages from this VPS? [y/N]: " purge_pkgs
-  if [[ "${purge_pkgs,,}" == "y" || "${purge_pkgs,,}" == "yes" ]]; then
+  # 7. Optional cleanup of shared runtime packages (--purge-deps)
+  if [[ "$PURGE_DEPS" == "true" ]]; then
     npm uninstall -g pm2 >/dev/null 2>&1 || true
     systemctl stop nginx >/dev/null 2>&1 || true
     DEBIAN_FRONTEND=noninteractive apt-get purge -y nginx 'nginx-*' certbot python3-certbot-nginx >/dev/null 2>&1 || true
-    apt-get autoremove -y >/dev/null 2>&1 || true
-    log_ok "Removed PM2, Nginx, and Certbot."
-  fi
-
-  read -r -p "Also uninstall Docker Engine from this VPS? [y/N]: " purge_docker
-  if [[ "${purge_docker,,}" == "y" || "${purge_docker,,}" == "yes" ]]; then
     systemctl stop docker docker.socket >/dev/null 2>&1 || true
     DEBIAN_FRONTEND=noninteractive apt-get purge -y docker-ce docker-ce-cli containerd.io docker.io docker-compose-plugin >/dev/null 2>&1 || true
     apt-get autoremove -y >/dev/null 2>&1 || true
-    log_ok "Removed Docker Engine."
+    log_ok "Purged runtime packages (PM2, Nginx, Certbot, Docker Engine)."
   fi
 
   echo ""
