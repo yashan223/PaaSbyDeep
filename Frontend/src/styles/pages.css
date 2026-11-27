@@ -686,6 +686,11 @@
   word-break: break-all;
 }
 
+.table .app-access-link {
+  white-space: nowrap;
+  word-break: normal;
+}
+
 .app-access-link:hover {
   text-decoration: underline;
 }
