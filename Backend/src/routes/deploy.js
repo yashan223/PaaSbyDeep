@@ -5,6 +5,7 @@ import { authenticate, requireRole } from '../middleware/auth.js';
 import { enqueue } from '../services/deploymentQueue.js';
 import { broadcast } from '../services/ws.js';
 import {
+  ensureContainerOnSharedNetwork,
   getActiveDeploymentLogs,
   getContainerLogs,
   getContainerStats,
@@ -124,6 +125,7 @@ router.post('/:id/restart', requireRole('admin', 'operator'), async (req, res) =
 
     const container = docker.getContainer(app.container_id);
     await container.restart();
+    await ensureContainerOnSharedNetwork(app.container_id);
     await sql`UPDATE applications SET status = 'running', updated_at = NOW() WHERE id = ${app.id}`;
     broadcast({ type: 'app:status', appId: app.id, appName: app.name, status: 'running' });
     void recordAudit({ req, action: 'app.restart', targetType: 'application', targetId: app.id, targetName: app.name });

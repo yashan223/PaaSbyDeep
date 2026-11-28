@@ -119,9 +119,11 @@ function StorageBucketsModal({ isOpen, service, canManage, onClose }) {
         <div className="modal-body">
           <div className="bucket-endpoint-bar">
             <span className="form-hint">
-              S3 API: <code>{service.external_url}</code>
+              {service.public_access
+                ? <>Public S3 API: <code>{service.external_url}</code></>
+                : <>Internal S3 API: <code>{service.internal_url}</code> (Private mode)</>}
             </span>
-            {service.console_url && (
+            {service.public_access && service.console_url ? (
               <a
                 href={service.console_url}
                 target="_blank"
@@ -130,6 +132,8 @@ function StorageBucketsModal({ isOpen, service, canManage, onClose }) {
               >
                 MinIO Console <ExternalLink size={11} />
               </a>
+            ) : (
+              <span className="form-hint">Console port: :{service.console_port || 9001} (127.0.0.1)</span>
             )}
           </div>
 

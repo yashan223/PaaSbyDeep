@@ -125,6 +125,7 @@ CREATE TABLE IF NOT EXISTS managed_services (
   container_id    TEXT,
   status          TEXT DEFAULT 'stopped',
   last_error      TEXT DEFAULT '',
+  public_access   BOOLEAN DEFAULT FALSE,
   memory_limit_mb INTEGER DEFAULT 512,
   created_at      TIMESTAMPTZ DEFAULT NOW(),
   updated_at      TIMESTAMPTZ DEFAULT NOW()
@@ -132,6 +133,7 @@ CREATE TABLE IF NOT EXISTS managed_services (
 
 ALTER TABLE managed_services ADD COLUMN IF NOT EXISTS console_port INTEGER;
 ALTER TABLE managed_services ADD COLUMN IF NOT EXISTS last_error TEXT DEFAULT '';
+ALTER TABLE managed_services ADD COLUMN IF NOT EXISTS public_access BOOLEAN DEFAULT FALSE;
 
 CREATE TABLE IF NOT EXISTS storage_buckets (
   id          SERIAL PRIMARY KEY,

@@ -11,6 +11,7 @@ function CreateDatabaseModal({ isOpen, onClose, onCreated }) {
     databaseName: 'appdb',
     port: '',
     memoryLimitMb: '512',
+    publicAccess: false,
   });
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
@@ -50,6 +51,7 @@ function CreateDatabaseModal({ isOpen, onClose, onCreated }) {
         port: form.port ? Number(form.port) : undefined,
         databaseName: form.databaseName.trim(),
         memoryLimitMb: Number(form.memoryLimitMb) || 512,
+        publicAccess: form.publicAccess,
       });
       setForm({
         serviceType: 'postgres',
@@ -57,6 +59,7 @@ function CreateDatabaseModal({ isOpen, onClose, onCreated }) {
         databaseName: 'appdb',
         port: '',
         memoryLimitMb: '512',
+        publicAccess: false,
       });
       onCreated?.(res);
       onClose?.();
@@ -72,7 +75,7 @@ function CreateDatabaseModal({ isOpen, onClose, onCreated }) {
       <div className="modal modal--wide" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h3 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Database size={17} /> Create Database
+            <Database size={17} /> Create Database / Service
           </h3>
           <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
             <X size={16} />
@@ -157,6 +160,15 @@ function CreateDatabaseModal({ isOpen, onClose, onCreated }) {
                 />
               </div>
             </div>
+
+            <label className="ssl-checkbox-label" style={{ marginTop: '14px' }}>
+              <input
+                type="checkbox"
+                checked={form.publicAccess}
+                onChange={(e) => setForm((f) => ({ ...f, publicAccess: e.target.checked }))}
+              />
+              <span>Expose public IP port (leave unchecked for private Docker network + localhost access — recommended)</span>
+            </label>
           </div>
 
           <div className="modal-footer">

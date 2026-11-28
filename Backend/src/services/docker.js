@@ -130,6 +130,26 @@ export async function ensureDockerNetwork() {
   }
 }
 
+/**
+ * Attach an existing container to the shared Docker bridge network if not already joined.
+ */
+export async function ensureContainerOnSharedNetwork(containerId) {
+  if (!containerId) return false;
+  const ok = await ensureDockerNetwork();
+  if (!ok) return false;
+  try {
+    const info = await docker.getContainer(containerId).inspect();
+    if (info?.NetworkSettings?.Networks?.[SHARED_DOCKER_NETWORK]) {
+      return true;
+    }
+    await docker.getNetwork(SHARED_DOCKER_NETWORK).connect({ Container: containerId });
+    return true;
+  } catch (err) {
+    if (err.statusCode === 409) return true;
+    return false;
+  }
+}
+
 export async function findAppContainer(app) {
   const safeName = sanitizeName(app.name);
   const containerName = safeName ? `paasbydeeep-${safeName}` : null;

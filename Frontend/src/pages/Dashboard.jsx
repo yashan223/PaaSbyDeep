@@ -385,14 +385,19 @@ function Dashboard() {
                     </td>
                     <td><span className="project-type-pill">{svc.service_type}</span></td>
                     <td><StatusBadge status={svc.status} /></td>
-                    <td><code>{svc.public_host || svc.container_hostname}:{svc.port}</code></td>
+                    <td>
+                      <code>{svc.public_access ? `${svc.public_host}:${svc.port}` : `127.0.0.1:${svc.port}`}</code>
+                      <span className="form-hint" style={{ marginLeft: '6px' }}>
+                        ({svc.public_access ? 'Public' : 'Private'})
+                      </span>
+                    </td>
                     <td>
                       <button
                         type="button"
                         className="btn btn-xs btn-secondary"
-                        onClick={() => handleCopyDbUrl(`dash-${svc.id}`, svc.external_url)}
+                        onClick={() => handleCopyDbUrl(`dash-${svc.id}`, svc.public_access ? svc.external_url : svc.internal_url)}
                         disabled={!canManage}
-                        title="Copy connection string"
+                        title={svc.public_access ? 'Copy public URL' : 'Copy internal Docker URL'}
                       >
                         {copiedSvcKey === `dash-${svc.id}`
                           ? <><Check size={11} /> Copied</>

@@ -1,19 +1,20 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Database, Plus, Play, RotateCcw, Square, Trash2, Terminal, Link2, Copy, Check, Eye, EyeOff, X, RefreshCw,
-  HardDrive, ExternalLink,
+  HardDrive, ExternalLink, Lock, Globe,
 } from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
 import LogViewer from '../components/LogViewer';
+import CreateDatabaseModal from '../components/CreateDatabaseModal';
 import StorageBucketsModal from '../components/StorageBucketsModal';
 import useApps from '../hooks/useApps';
 import { useAuth } from '../context/AuthContext';
 import { useWebSocket } from '../context/WebSocketContext';
 import {
-  getServiceTemplates, getServices, createService, controlService, getServiceLogs, attachServiceToApp,
-  deleteService, listServiceBuckets,
+  getServiceTemplates, getServices, controlService, setServiceAccess, getServiceLogs,
+  attachServiceToApp, deleteService, listServiceBuckets,
 } from '../api/services';
-import { DEFAULT_SERVICE_TEMPLATES, sortServiceTemplates } from '../utils/serviceTemplates';
+import { DEFAULT_SERVICE_TEMPLATES } from '../utils/serviceTemplates';
 
 function Services() {
   const { user } = useAuth();
@@ -26,16 +27,8 @@ function Services() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [creating, setCreating] = useState(false);
+  const [showCreateModal, setShowCreateModal] = useState(false);
   const [busyId, setBusyId] = useState(null);
-
-  const [form, setForm] = useState({
-    serviceType: 'postgres',
-    name: '',
-    databaseName: 'appdb',
-    port: '',
-    memoryLimitMb: '512',
-  });
 
   const [revealedIds, setRevealedIds] = useState({});
   const [copiedKey, setCopiedKey] = useState('');
@@ -93,46 +86,6 @@ function Services() {
     });
   }, [subscribe, loadAll]);
 
-  const handleSelectTemplate = (type) => {
-    const tpl = templates[type];
-    setForm((f) => ({
-      ...f,
-      serviceType: type,
-      databaseName: tpl?.defaultDatabase || '',
-    }));
-  };
-
-  const handleCreate = async (e) => {
-    e.preventDefault();
-    setError('');
-    setNotice('');
-    if (!form.name.trim()) {
-      setError('Service name is required.');
-      return;
-    }
-    setCreating(true);
-    try {
-      const res = await createService({
-        name: form.name.trim().toLowerCase(),
-        serviceType: form.serviceType,
-        port: form.port ? Number(form.port) : undefined,
-        databaseName: form.databaseName.trim(),
-        memoryLimitMb: Number(form.memoryLimitMb) || 512,
-      });
-      setForm((f) => ({ ...f, name: '', port: '' }));
-      if (res.startError) {
-        setError(`Service '${res.service.name}' was created, but failed to start: ${res.startError}`);
-      } else {
-        setNotice(`Managed service '${res.service.name}' created and running on port ${res.service.port}.`);
-      }
-      await loadAll();
-    } catch (err) {
-      setError(err?.response?.data?.error || 'Failed to create managed service.');
-    } finally {
-      setCreating(false);
-    }
-  };
-
   const handleControl = async (id, action) => {
     setError('');
     setNotice('');
@@ -144,6 +97,24 @@ function Services() {
     } catch (err) {
       setError(err?.response?.data?.error || `Failed to ${action} service.`);
       await loadAll();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleToggleAccess = async (svc) => {
+    setError('');
+    setNotice('');
+    setBusyId(svc.id);
+    try {
+      const nextPublic = !svc.public_access;
+      const updated = await setServiceAccess(svc.id, nextPublic);
+      setNotice(
+        `Service '${updated.name}' is now ${nextPublic ? 'publicly reachable on VPS IP' : 'restricted to private Docker network & localhost'}.`
+      );
+      await loadAll();
+    } catch (err) {
+      setError(err?.response?.data?.error || 'Failed to update service network access.');
     } finally {
       setBusyId(null);
     }
@@ -224,98 +195,21 @@ function Services() {
     }).catch(() => {});
   };
 
-  const templateEntries = sortServiceTemplates(templates);
-
   return (
     <div className="page">
       <div className="page-header">
         <h2 className="page-heading" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Database size={18} /> Databases &amp; Services
         </h2>
+        {canManage && (
+          <button type="button" className="btn btn-primary" onClick={() => setShowCreateModal(true)}>
+            <Plus size={15} /> Create Database
+          </button>
+        )}
       </div>
 
       {error && <div className="alert alert-error" style={{ marginBottom: '16px' }}>{error}</div>}
       {notice && <div className="alert alert-success" style={{ marginBottom: '16px' }}>{notice}</div>}
-
-      {canManage && (
-        <div className="detail-card" style={{ marginBottom: '24px' }}>
-          <h3 className="detail-card-title">Create Database / Service</h3>
-
-          <div className="service-template-grid">
-            {templateEntries.map(([key, tpl]) => (
-              <button
-                key={key}
-                type="button"
-                className={`service-template-card${form.serviceType === key ? ' service-template-card--active' : ''}`}
-                onClick={() => handleSelectTemplate(key)}
-              >
-                <span className="service-template-name">{tpl.label}</span>
-                <span className="service-template-meta">
-                  v{tpl.version} · :{tpl.defaultPort}{tpl.defaultConsolePort ? ` / :${tpl.defaultConsolePort}` : ''}
-                </span>
-              </button>
-            ))}
-          </div>
-
-          <form className="service-form-row" onSubmit={handleCreate}>
-            <div className="service-form-field">
-              <label className="form-label" htmlFor="svc-name">Service Name *</label>
-              <input
-                id="svc-name"
-                type="text"
-                className="form-input"
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              />
-            </div>
-
-            {form.serviceType !== 'redis' && form.serviceType !== 'minio' && (
-              <div className="service-form-field">
-                <label className="form-label" htmlFor="svc-db">Database Name</label>
-                <input
-                  id="svc-db"
-                  type="text"
-                  className="form-input"
-                  value={form.databaseName}
-                  onChange={(e) => setForm((f) => ({ ...f, databaseName: e.target.value }))}
-                />
-              </div>
-            )}
-
-            <div className="service-form-field service-form-field--sm">
-              <label className="form-label" htmlFor="svc-port">Port (auto)</label>
-              <input
-                id="svc-port"
-                type="number"
-                className="form-input"
-                value={form.port}
-                onChange={(e) => setForm((f) => ({ ...f, port: e.target.value }))}
-                min={1024}
-                max={65535}
-              />
-            </div>
-
-            <div className="service-form-field service-form-field--sm">
-              <label className="form-label" htmlFor="svc-mem">Memory (MB)</label>
-              <input
-                id="svc-mem"
-                type="number"
-                className="form-input"
-                value={form.memoryLimitMb}
-                onChange={(e) => setForm((f) => ({ ...f, memoryLimitMb: e.target.value }))}
-                min={128}
-                max={16384}
-              />
-            </div>
-
-            <div className="service-form-submit">
-              <button type="submit" className="btn btn-primary" disabled={creating}>
-                <Plus size={14} /> {creating ? 'Creating…' : form.serviceType === 'minio' ? 'Create Storage' : 'Create Database'}
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
 
       <div className="section" style={{ marginTop: 0 }}>
         <h3 className="section-title">Provisioned Databases &amp; Services ({services.length})</h3>
@@ -324,7 +218,12 @@ function Services() {
         ) : services.length === 0 ? (
           <div className="empty-state">
             <Database size={38} />
-            <p>No managed databases or storage services provisioned yet. Create PostgreSQL, MongoDB, MinIO (S3), Redis, or MySQL above.</p>
+            <p>No managed databases or storage services provisioned yet. Create PostgreSQL, MongoDB, MinIO (S3), Redis, or MySQL.</p>
+            {canManage && (
+              <button type="button" className="btn btn-primary" onClick={() => setShowCreateModal(true)}>
+                <Plus size={14} /> Create Database
+              </button>
+            )}
           </div>
         ) : (
           <div className="app-grid app-grid--services">
@@ -352,6 +251,9 @@ function Services() {
                     {svc.console_port && <span>Console: <strong>{svc.console_port}</strong></span>}
                     {svc.database_name && <span>DB: <strong>{svc.database_name}</strong></span>}
                     <span>RAM: <strong>{svc.memory_limit_mb} MB</strong></span>
+                    <span className={`service-access-pill ${svc.public_access ? 'service-access-pill--public' : 'service-access-pill--private'}`}>
+                      {svc.public_access ? <><Globe size={11} /> Public</> : <><Lock size={11} /> Private</>}
+                    </span>
                   </div>
 
                   {svc.status === 'error' && (
@@ -363,7 +265,7 @@ function Services() {
                   <div className="service-conn-box">
                     <div className="code-block-header">
                       <span className="form-hint">
-                        {isMinio ? 'External S3 Endpoint (HTTP · Raw IP)' : 'External URL (Compass / pgAdmin / CLI)'}
+                        Internal Docker URL ({svc.suggested_env_key})
                       </span>
                       <div style={{ display: 'flex', gap: '4px' }}>
                         {!isMinio && canManage && (
@@ -379,48 +281,70 @@ function Services() {
                         <button
                           type="button"
                           className="btn btn-xs btn-secondary"
-                          onClick={() => copyValue(`ext-${svc.id}`, svc.external_url)}
+                          onClick={() => copyValue(`int-${svc.id}`, svc.internal_url)}
                           disabled={!canManage}
-                          title="Copy External URL"
+                          title="Copy Internal Docker URL"
+                        >
+                          {copiedKey === `int-${svc.id}` ? <Check size={11} /> : <Copy size={11} />}
+                        </button>
+                      </div>
+                    </div>
+                    <code className="webhook-url">
+                      {revealed ? svc.internal_url : svc.internal_url.replace(/:([^:@]+)@/, ':••••••••@')}
+                    </code>
+                    <span className="form-hint" style={{ display: 'block', marginTop: '6px' }}>
+                      For backend apps on this VPS only (internal Docker network — not openable in browsers).
+                    </span>
+                  </div>
+
+                  <div className="service-conn-box">
+                    <div className="code-block-header">
+                      <span className="form-hint">
+                        {svc.public_access
+                          ? (isMinio ? 'Public S3 Endpoint (HTTP · Unencrypted)' : 'Public External URL (Raw TCP)')
+                          : 'Private Access & SSH Tunnel'}
+                      </span>
+                      <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                        {canManage && (
+                          <button
+                            type="button"
+                            className="btn btn-xs btn-secondary"
+                            disabled={isBusy}
+                            onClick={() => handleToggleAccess(svc)}
+                            title={svc.public_access ? 'Restrict to private Docker network & 127.0.0.1' : 'Expose port publicly on VPS IP'}
+                          >
+                            {svc.public_access ? <><Lock size={11} /> Make Private</> : <><Globe size={11} /> Make Public</>}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="btn btn-xs btn-secondary"
+                          onClick={() => copyValue(`ext-${svc.id}`, svc.public_access ? svc.external_url : (svc.ssh_tunnel_cmd || svc.external_url))}
+                          disabled={!canManage}
+                          title={svc.public_access ? 'Copy Public URL' : 'Copy SSH Tunnel Command'}
                         >
                           {copiedKey === `ext-${svc.id}` ? <Check size={11} /> : <Copy size={11} />}
                         </button>
                       </div>
                     </div>
                     <code className="webhook-url">
-                      {revealed ? svc.external_url : svc.external_url.replace(/:([^:@]+)@/, ':••••••••@')}
+                      {svc.public_access
+                        ? (revealed ? svc.external_url : svc.external_url.replace(/:([^:@]+)@/, ':••••••••@'))
+                        : (svc.ssh_tunnel_cmd || svc.external_url)}
                     </code>
-                    {isMinio && (
-                      <span className="form-hint" style={{ display: 'block', marginTop: '6px' }}>
-                        Raw IP serves HTTP; apps inside Docker should connect via Internal URL below.
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="service-conn-box">
-                    <div className="code-block-header">
-                      <span className="form-hint">Internal Docker URL ({svc.suggested_env_key})</span>
-                      <button
-                        type="button"
-                        className="btn btn-xs btn-secondary"
-                        onClick={() => copyValue(`int-${svc.id}`, svc.internal_url)}
-                        disabled={!canManage}
-                        title="Copy Internal URL"
-                      >
-                        {copiedKey === `int-${svc.id}` ? <Check size={11} /> : <Copy size={11} />}
-                      </button>
-                    </div>
-                    <code className="webhook-url">
-                      {revealed ? svc.internal_url : svc.internal_url.replace(/:([^:@]+)@/, ':••••••••@')}
-                    </code>
+                    <span className="form-hint" style={{ display: 'block', marginTop: '6px' }}>
+                      {svc.public_access
+                        ? 'Bound on 0.0.0.0 (unencrypted). Use Make Private to close public port access.'
+                        : `Bound to 127.0.0.1:${svc.port}. Run SSH tunnel locally to reach http://localhost:${isMinio ? (svc.console_port || svc.port) : svc.port} securely.`}
+                    </span>
                   </div>
 
                   {isMinio && (
                     <div className="service-conn-box">
                       <div className="code-block-header">
-                        <span className="form-hint">S3 Credentials &amp; Console</span>
+                        <span className="form-hint">S3 Credentials &amp; Web Console</span>
                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                          {svc.console_url && (
+                          {svc.public_access && svc.console_url ? (
                             <a
                               href={svc.console_url}
                               target="_blank"
@@ -429,6 +353,8 @@ function Services() {
                             >
                               Console <ExternalLink size={11} />
                             </a>
+                          ) : (
+                            <span className="form-hint">Console :{svc.console_port || 9001} (via SSH)</span>
                           )}
                           {canManage && (
                             <button
@@ -666,6 +592,20 @@ function Services() {
           </div>
         </div>
       )}
+      <CreateDatabaseModal
+        isOpen={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+        onCreated={(res) => {
+          setError('');
+          setNotice('');
+          if (res?.startError) {
+            setError(`Service '${res.service.name}' was created, but failed to start: ${res.startError}`);
+          } else {
+            setNotice(`Managed service '${res.service.name}' created and running on port ${res.service.port}.`);
+          }
+          void loadAll();
+        }}
+      />
       <StorageBucketsModal
         isOpen={Boolean(bucketsTarget)}
         service={bucketsTarget}

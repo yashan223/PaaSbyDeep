@@ -8,6 +8,7 @@ import {
   listManagedServices,
   createManagedService,
   controlManagedService,
+  setManagedServiceAccess,
   getManagedServiceLogs,
   deleteManagedService,
   serializeService,
@@ -15,6 +16,7 @@ import {
   createServiceBucket,
   deleteServiceBucket,
 } from '../services/serviceManager.js';
+import { ensureContainerOnSharedNetwork } from '../services/docker.js';
 import { getServerPublicIps } from '../services/domainManager.js';
 
 const router = Router();
@@ -43,7 +45,7 @@ router.get('/', async (req, res) => {
 });
 
 router.post('/', requireRole('admin', 'operator'), async (req, res) => {
-  const { name, serviceType, service_type, port, databaseName, database_name, memoryLimitMb, memory_limit_mb, autoStart } = req.body || {};
+  const { name, serviceType, service_type, port, databaseName, database_name, memoryLimitMb, memory_limit_mb, publicAccess, public_access, autoStart } = req.body || {};
   try {
     const result = await createManagedService(
       {
@@ -52,6 +54,7 @@ router.post('/', requireRole('admin', 'operator'), async (req, res) => {
         port,
         databaseName: databaseName ?? database_name,
         memoryLimitMb: memoryLimitMb ?? memory_limit_mb ?? 512,
+        publicAccess: Boolean(publicAccess ?? public_access),
         autoStart: autoStart !== false,
       },
       req.user?.role
@@ -104,12 +107,16 @@ router.post('/:id/attach', requireRole('admin', 'operator'), async (req, res) =>
     const sql = getDb();
     const [svcRows, appRows, ips] = await Promise.all([
       sql`SELECT * FROM managed_services WHERE id = ${serviceId}`,
-      sql`SELECT id, name, env_vars FROM applications WHERE id = ${appId}`,
+      sql`SELECT id, name, container_id, env_vars FROM applications WHERE id = ${appId}`,
       getServerPublicIps().catch(() => ({ publicIpv4: null, localIpv4: 'localhost' })),
     ]);
 
     if (!svcRows[0]) return res.status(404).json({ error: 'Managed service not found.' });
     if (!appRows[0]) return res.status(404).json({ error: 'Target application not found.' });
+
+    if (appRows[0].container_id) {
+      await ensureContainerOnSharedNetwork(appRows[0].container_id);
+    }
 
     const publicHost = ips.publicIpv4 || ips.localIpv4 || 'localhost';
     const serialized = serializeService(svcRows[0], publicHost, 'admin');
@@ -213,6 +220,27 @@ router.delete('/:id/buckets/:bucketName', requireRole('admin', 'operator'), asyn
     return res.json({ message: `Bucket '${bucketName}' deleted.` });
   } catch (err) {
     return res.status(400).json({ error: err.message || 'Failed to delete storage bucket.' });
+  }
+});
+
+router.post('/:id/access', requireRole('admin', 'operator'), async (req, res) => {
+  const serviceId = parseId(req.params.id);
+  if (!serviceId) return res.status(400).json({ error: 'Invalid service ID.' });
+
+  const publicAccess = Boolean(req.body?.publicAccess ?? req.body?.public_access);
+  try {
+    const updated = await setManagedServiceAccess(serviceId, publicAccess, req.user?.role);
+    void recordAudit({
+      req,
+      action: publicAccess ? 'service.expose_public' : 'service.restrict_private',
+      targetType: 'service',
+      targetId: updated.id,
+      targetName: updated.name,
+      details: { publicAccess },
+    });
+    return res.json(updated);
+  } catch (err) {
+    return res.status(400).json({ error: err.message || 'Failed to update service network access.' });
   }
 });
 

@@ -8,6 +8,7 @@ import {
   docker,
   demuxDockerLogBuffer,
   ensureDockerNetwork,
+  ensureContainerOnSharedNetwork,
   SHARED_DOCKER_NETWORK,
 } from './docker.js';
 import { getServerPublicIps } from './domainManager.js';
@@ -198,19 +199,28 @@ export function buildConnectionString(service, host, port, { maskSecret = false 
 export function serializeService(service, publicHost = 'localhost', role = 'admin') {
   const tpl = SERVICE_TEMPLATES[service.service_type] || {};
   const isViewer = role === 'viewer';
+  const publicAccess = Boolean(service.public_access);
   const containerHost = getContainerName(service);
+  const externalHost = publicAccess ? publicHost : '127.0.0.1';
   const rawPass = decryptSecret(service.password) || '';
   const { password, ...rest } = service;
   void password;
 
   const consoleUrl = service.service_type === 'minio' && service.console_port
-    ? `http://${publicHost}:${service.console_port}`
+    ? `http://${externalHost}:${service.console_port}`
     : null;
+  const tunnelPort = service.service_type === 'minio' && service.console_port
+    ? service.console_port
+    : service.port;
 
   return {
     ...rest,
+    public_access: publicAccess,
     public_host: publicHost,
     console_url: consoleUrl,
+    ssh_tunnel_cmd: !publicAccess && !isViewer
+      ? `ssh -N -L ${tunnelPort}:127.0.0.1:${tunnelPort} root@${publicHost}`
+      : '',
     access_key: service.service_type === 'minio' ? (isViewer ? '••••••••' : (service.username || 'paasadmin')) : undefined,
     secret_key: service.service_type === 'minio' ? (isViewer ? '••••••••' : rawPass) : undefined,
     suggested_env_key: tpl.envKey || 'SERVICE_URL',
@@ -218,7 +228,7 @@ export function serializeService(service, publicHost = 'localhost', role = 'admi
     internal_url: buildConnectionString(service, containerHost, tpl.containerPort || service.port, {
       maskSecret: isViewer,
     }),
-    external_url: buildConnectionString(service, publicHost, service.port, {
+    external_url: buildConnectionString(service, externalHost, service.port, {
       maskSecret: isViewer,
     }),
   };
@@ -293,12 +303,13 @@ async function createAndStartServiceContainer(service, plainPassword) {
   const cmd = buildContainerCmd(service.service_type, plainPassword);
   const memBytes = Math.max(128, Number(service.memory_limit_mb) || 512) * 1024 * 1024;
 
-  const portBindings = { [portKey]: [{ HostPort: String(service.port) }] };
+  const hostIp = service.public_access ? '0.0.0.0' : '127.0.0.1';
+  const portBindings = { [portKey]: [{ HostIp: hostIp, HostPort: String(service.port) }] };
   const exposedPorts = { [portKey]: {} };
   if (service.service_type === 'minio' && service.console_port) {
     const consoleKey = '9001/tcp';
     exposedPorts[consoleKey] = {};
-    portBindings[consoleKey] = [{ HostPort: String(service.console_port) }];
+    portBindings[consoleKey] = [{ HostIp: hostIp, HostPort: String(service.console_port) }];
   }
 
   const createOptions = {
@@ -382,6 +393,7 @@ export async function createManagedService({
   port,
   databaseName,
   memoryLimitMb = 512,
+  publicAccess = false,
   autoStart = true,
 }, role = 'admin') {
   const safeType = String(serviceType || '').trim().toLowerCase();
@@ -400,6 +412,7 @@ export async function createManagedService({
     throw new Error('Memory limit must be between 128 and 16384 MB.');
   }
 
+  const isPublic = Boolean(publicAccess);
   const sql = getDb();
   const assignedPort = await allocateServicePort(sql, port, tpl.defaultPort);
   const consolePort = tpl.defaultConsolePort
@@ -414,12 +427,12 @@ export async function createManagedService({
 
   const rows = await sql`
     INSERT INTO managed_services (
-      name, service_type, version, port, console_port, username, password, database_name, volume_name, status, memory_limit_mb
+      name, service_type, version, port, console_port, username, password, database_name, volume_name, status, public_access, memory_limit_mb
     )
     VALUES (
       ${safeName}, ${safeType}, ${tpl.version}, ${assignedPort}, ${consolePort},
       ${tpl.defaultUsername}, ${encryptedPassword}, ${cleanDbName},
-      ${volumeName}, ${autoStart ? 'starting' : 'stopped'}, ${memMb}
+      ${volumeName}, ${autoStart ? 'starting' : 'stopped'}, ${isPublic}, ${memMb}
     )
     RETURNING *
   `;
@@ -466,18 +479,28 @@ export async function controlManagedService(id, action, role = 'admin') {
   const plainPassword = decryptSecret(service.password) || '';
 
   try {
+    const portKey = `${tpl?.containerPort || service.port}/tcp`;
+    const expectedHostIp = service.public_access ? '0.0.0.0' : '127.0.0.1';
+    const hasBindingMismatch = (found) => {
+      const boundIp = found?.info?.HostConfig?.PortBindings?.[portKey]?.[0]?.HostIp || '0.0.0.0';
+      return boundIp !== expectedHostIp;
+    };
+
     if (action === 'start') {
       const found = await findServiceContainer(service);
       let containerId = service.container_id;
       const needsRecreate = !found
+        || hasBindingMismatch(found)
         || (!found.info.State?.Running && (service.status === 'error' || (tpl?.image && found.info.Config?.Image !== tpl.image)));
       if (needsRecreate) {
         containerId = await createAndStartServiceContainer(service, plainPassword);
       } else if (!found.info.State?.Running) {
         await found.container.start();
         containerId = found.info.Id;
+        await ensureContainerOnSharedNetwork(containerId);
       } else {
         containerId = found.info.Id;
+        await ensureContainerOnSharedNetwork(containerId);
       }
       const nextVer = tpl?.version || service.version;
       const upd = await sql`
@@ -498,7 +521,9 @@ export async function controlManagedService(id, action, role = 'admin') {
       service = upd[0];
     } else if (action === 'restart') {
       const found = await findServiceContainer(service);
-      const needsRecreate = !found || (tpl?.image && found.info.Config?.Image !== tpl.image);
+      const needsRecreate = !found
+        || hasBindingMismatch(found)
+        || (tpl?.image && found.info.Config?.Image !== tpl.image);
       if (needsRecreate) {
         const containerId = await createAndStartServiceContainer(service, plainPassword);
         service = (await sql`
@@ -507,6 +532,7 @@ export async function controlManagedService(id, action, role = 'admin') {
         `)[0];
       } else {
         await found.container.restart();
+        await ensureContainerOnSharedNetwork(found.info.Id);
       }
       const upd = await sql`
         UPDATE managed_services SET status = 'running', last_error = '', updated_at = NOW()
@@ -529,6 +555,42 @@ export async function controlManagedService(id, action, role = 'admin') {
   const ips = await getServerPublicIps().catch(() => ({ publicIpv4: null, localIpv4: 'localhost' }));
   const publicHost = ips.publicIpv4 || ips.localIpv4 || 'localhost';
   broadcast({ type: 'services:changed', action, serviceId: service.id });
+  return serializeService(service, publicHost, role);
+}
+
+/**
+ * Toggle whether a managed service binds publicly (0.0.0.0) or stays private to Docker & 127.0.0.1.
+ */
+export async function setManagedServiceAccess(id, publicAccess, role = 'admin') {
+  const sql = getDb();
+  const isPublic = Boolean(publicAccess);
+  const rows = await sql`
+    UPDATE managed_services SET public_access = ${isPublic}, updated_at = NOW()
+    WHERE id = ${id} RETURNING *
+  `;
+  if (!rows[0]) throw new Error('Managed service not found.');
+  let service = rows[0];
+
+  const found = await findServiceContainer(service).catch(() => null);
+  if (found?.info?.State?.Running) {
+    const plainPassword = decryptSecret(service.password) || '';
+    const containerId = await createAndStartServiceContainer(service, plainPassword);
+    const upd = await sql`
+      UPDATE managed_services SET container_id = ${containerId}, status = 'running', last_error = '', updated_at = NOW()
+      WHERE id = ${id} RETURNING *
+    `;
+    service = upd[0];
+  } else if (found) {
+    try {
+      await found.container.remove({ force: true });
+      await sql`UPDATE managed_services SET container_id = NULL WHERE id = ${id}`;
+    } catch {
+    }
+  }
+
+  const ips = await getServerPublicIps().catch(() => ({ publicIpv4: null, localIpv4: 'localhost' }));
+  const publicHost = ips.publicIpv4 || ips.localIpv4 || 'localhost';
+  broadcast({ type: 'services:changed', action: 'access', serviceId: service.id });
   return serializeService(service, publicHost, role);
 }
 

@@ -9,6 +9,9 @@ export const createService = (data) => client.post('/services', data).then((r) =
 export const controlService = (id, action) =>
   client.post(`/services/${id}/${action}`).then((r) => r.data);
 
+export const setServiceAccess = (id, publicAccess) =>
+  client.post(`/services/${id}/access`, { publicAccess }).then((r) => r.data);
+
 export const getServiceLogs = (id, tail = 200) =>
   client.get(`/services/${id}/logs`, { params: { tail } }).then((r) => r.data);
 
