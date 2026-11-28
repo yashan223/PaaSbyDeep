@@ -616,6 +616,17 @@ export async function deployApp(appId, deploymentId, triggeredBy, commitSha) {
       appendLog(logsRef, 'Repository updated successfully.', logCtx);
     }
 
+    let resolvedCommitSha = commitSha || null;
+    try {
+      const headOut = (await simpleGit(repoPath).revparse(['HEAD'])).trim();
+      if (headOut) resolvedCommitSha = headOut;
+    } catch {
+    }
+    if (resolvedCommitSha) {
+      appendLog(logsRef, `Commit SHA: ${resolvedCommitSha}`, logCtx);
+      await sql`UPDATE deployments SET commit_sha = ${resolvedCommitSha} WHERE id = ${deploymentId}`;
+    }
+
     const detected = detectProjectFromDir(repoPath, app.dockerfile_path);
     let buildDockerfile = app.dockerfile_path;
     let tempDockerfilePath = null;
@@ -696,14 +707,21 @@ export async function deployApp(appId, deploymentId, triggeredBy, commitSha) {
     await sql`
       UPDATE deployments
       SET status = 'success',
-          commit_sha = ${commitSha},
+          commit_sha = COALESCE(${resolvedCommitSha}, commit_sha),
           image_tag = ${versionedTag},
           finished_at = NOW(),
           logs = ${logsRef.value}
       WHERE id = ${deploymentId}
     `;
 
-    broadcast({ type: 'deploy:status', appId, appName: app.name, deploymentId, status: 'success' });
+    broadcast({
+      type: 'deploy:status',
+      appId,
+      appName: app.name,
+      deploymentId,
+      status: 'success',
+      commitSha: resolvedCommitSha,
+    });
     broadcast({
       type: 'app:status',
       appId,

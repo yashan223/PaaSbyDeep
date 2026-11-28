@@ -40,6 +40,7 @@ function AppRoutes() {
         <Route path="apps/:id" element={<AppDetail />} />
         <Route path="apps/:id/edit" element={<EditApp />} />
         <Route path="domains" element={<Domains />} />
+        <Route path="databases" element={<Services />} />
         <Route path="services" element={<Services />} />
         <Route path="logs" element={<LiveLogs />} />
         <Route path="github" element={<GitHubConnect />} />

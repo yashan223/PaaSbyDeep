@@ -162,6 +162,7 @@ router.get('/', async (req, res) => {
       SELECT a.*,
         (SELECT status     FROM deployments WHERE app_id = a.id ORDER BY id DESC LIMIT 1) AS last_deployment_status,
         (SELECT started_at FROM deployments WHERE app_id = a.id ORDER BY id DESC LIMIT 1) AS last_deployed_at,
+        (SELECT commit_sha FROM deployments WHERE app_id = a.id ORDER BY id DESC LIMIT 1) AS last_commit_sha,
         COALESCE(
           (SELECT json_agg(json_build_object('id', d.id, 'domain', d.domain, 'ssl_enabled', d.ssl_enabled) ORDER BY d.created_at ASC)
            FROM domains d WHERE d.app_id = a.id),
@@ -307,6 +308,7 @@ router.get('/:id', async (req, res) => {
       SELECT a.*,
         (SELECT status     FROM deployments WHERE app_id = a.id ORDER BY id DESC LIMIT 1) AS last_deployment_status,
         (SELECT started_at FROM deployments WHERE app_id = a.id ORDER BY id DESC LIMIT 1) AS last_deployed_at,
+        (SELECT commit_sha FROM deployments WHERE app_id = a.id ORDER BY id DESC LIMIT 1) AS last_commit_sha,
         COALESCE(
           (SELECT json_agg(json_build_object('id', d.id, 'domain', d.domain, 'ssl_enabled', d.ssl_enabled) ORDER BY d.created_at ASC)
            FROM domains d WHERE d.app_id = a.id),

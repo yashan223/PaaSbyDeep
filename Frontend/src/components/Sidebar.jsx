@@ -96,12 +96,12 @@ function Sidebar({ isOpen = false, onClose }) {
             <span>Domains &amp; SSL</span>
           </NavLink>
           <NavLink
-            to="/services"
+            to="/databases"
             onClick={handleNavClick}
             className={({ isActive }) => `sidebar-link${isActive ? ' sidebar-link--active' : ''}`}
           >
             <Database size={16} />
-            <span>Services</span>
+            <span>Databases</span>
           </NavLink>
           <NavLink
             to="/logs"

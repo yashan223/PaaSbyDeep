@@ -1,15 +1,19 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Database, Plus, Play, RotateCcw, Square, Trash2, Terminal, Link2, Copy, Check, Eye, EyeOff, X, RefreshCw,
+  HardDrive, ExternalLink,
 } from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
 import LogViewer from '../components/LogViewer';
+import StorageBucketsModal from '../components/StorageBucketsModal';
 import useApps from '../hooks/useApps';
 import { useAuth } from '../context/AuthContext';
 import { useWebSocket } from '../context/WebSocketContext';
 import {
-  getServiceTemplates, getServices, createService, controlService, getServiceLogs, attachServiceToApp, deleteService,
+  getServiceTemplates, getServices, createService, controlService, getServiceLogs, attachServiceToApp,
+  deleteService, listServiceBuckets,
 } from '../api/services';
+import { DEFAULT_SERVICE_TEMPLATES, sortServiceTemplates } from '../utils/serviceTemplates';
 
 function Services() {
   const { user } = useAuth();
@@ -17,7 +21,7 @@ function Services() {
   const { subscribe } = useWebSocket();
   const { apps, fetchApps } = useApps();
 
-  const [templates, setTemplates] = useState({});
+  const [templates, setTemplates] = useState(DEFAULT_SERVICE_TEMPLATES);
   const [services, setServices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -37,7 +41,11 @@ function Services() {
   const [attachTarget, setAttachTarget] = useState(null);
   const [attachAppId, setAttachAppId] = useState('');
   const [attachEnvKey, setAttachEnvKey] = useState('');
+  const [attachBucketName, setAttachBucketName] = useState('');
+  const [attachBuckets, setAttachBuckets] = useState([]);
   const [attachBusy, setAttachBusy] = useState(false);
+
+  const [bucketsTarget, setBucketsTarget] = useState(null);
 
   const [logsTarget, setLogsTarget] = useState(null);
   const [serviceLogs, setServiceLogs] = useState('');
@@ -154,6 +162,17 @@ function Services() {
     setAttachTarget(svc);
     setAttachAppId(apps[0]?.id ? String(apps[0].id) : '');
     setAttachEnvKey(svc.suggested_env_key || 'DATABASE_URL');
+    setAttachBucketName('');
+    setAttachBuckets([]);
+    if (svc.service_type === 'minio') {
+      listServiceBuckets(svc.id)
+        .then((res) => {
+          const list = Array.isArray(res?.buckets) ? res.buckets : [];
+          setAttachBuckets(list);
+          if (list[0]?.name) setAttachBucketName(list[0].name);
+        })
+        .catch(() => {});
+    }
   };
 
   const handleAttachSubmit = async (e) => {
@@ -162,7 +181,12 @@ function Services() {
     setAttachBusy(true);
     setError('');
     try {
-      const res = await attachServiceToApp(attachTarget.id, attachAppId, attachEnvKey.trim());
+      const res = await attachServiceToApp(
+        attachTarget.id,
+        attachAppId,
+        attachEnvKey.trim(),
+        attachTarget.service_type === 'minio' ? attachBucketName.trim() : ''
+      );
       setNotice(res.message);
       setAttachTarget(null);
     } catch (err) {
@@ -195,13 +219,13 @@ function Services() {
     }).catch(() => {});
   };
 
-  const templateEntries = Object.entries(templates);
+  const templateEntries = sortServiceTemplates(templates);
 
   return (
     <div className="page">
       <div className="page-header">
         <h2 className="page-heading" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <Database size={18} /> Managed Databases &amp; Services
+          <Database size={18} /> Databases &amp; Services
         </h2>
       </div>
 
@@ -210,7 +234,7 @@ function Services() {
 
       {canManage && (
         <div className="detail-card" style={{ marginBottom: '24px' }}>
-          <h3 className="detail-card-title">Provision Managed Service</h3>
+          <h3 className="detail-card-title">Create Database / Service</h3>
 
           <div className="service-template-grid">
             {templateEntries.map(([key, tpl]) => (
@@ -221,13 +245,15 @@ function Services() {
                 onClick={() => handleSelectTemplate(key)}
               >
                 <span className="service-template-name">{tpl.label}</span>
-                <span className="service-template-meta">v{tpl.version} · :{tpl.defaultPort}</span>
+                <span className="service-template-meta">
+                  v{tpl.version} · :{tpl.defaultPort}{tpl.defaultConsolePort ? ` / :${tpl.defaultConsolePort}` : ''}
+                </span>
               </button>
             ))}
           </div>
 
-          <form className="domain-add-form" onSubmit={handleCreate} style={{ marginTop: '14px' }}>
-            <div className="domain-add-field">
+          <form className="service-form-row" onSubmit={handleCreate}>
+            <div className="service-form-field">
               <label className="form-label" htmlFor="svc-name">Service Name *</label>
               <input
                 id="svc-name"
@@ -238,8 +264,8 @@ function Services() {
               />
             </div>
 
-            {form.serviceType !== 'redis' && (
-              <div className="domain-add-field">
+            {form.serviceType !== 'redis' && form.serviceType !== 'minio' && (
+              <div className="service-form-field">
                 <label className="form-label" htmlFor="svc-db">Database Name</label>
                 <input
                   id="svc-db"
@@ -251,8 +277,8 @@ function Services() {
               </div>
             )}
 
-            <div className="domain-add-field">
-              <label className="form-label" htmlFor="svc-port">Port (auto if blank)</label>
+            <div className="service-form-field service-form-field--sm">
+              <label className="form-label" htmlFor="svc-port">Port (auto)</label>
               <input
                 id="svc-port"
                 type="number"
@@ -264,7 +290,7 @@ function Services() {
               />
             </div>
 
-            <div className="domain-add-field">
+            <div className="service-form-field service-form-field--sm">
               <label className="form-label" htmlFor="svc-mem">Memory (MB)</label>
               <input
                 id="svc-mem"
@@ -277,9 +303,9 @@ function Services() {
               />
             </div>
 
-            <div className="domain-add-submit">
+            <div className="service-form-submit">
               <button type="submit" className="btn btn-primary" disabled={creating}>
-                <Plus size={14} /> {creating ? 'Provisioning…' : 'Create Service'}
+                <Plus size={14} /> {creating ? 'Creating…' : form.serviceType === 'minio' ? 'Create Storage' : 'Create Database'}
               </button>
             </div>
           </form>
@@ -287,18 +313,19 @@ function Services() {
       )}
 
       <div className="section" style={{ marginTop: 0 }}>
-        <h3 className="section-title">Provisioned Services ({services.length})</h3>
+        <h3 className="section-title">Provisioned Databases &amp; Services ({services.length})</h3>
         {loading ? (
-          <div className="loading-state">Loading services…</div>
+          <div className="loading-state">Loading databases…</div>
         ) : services.length === 0 ? (
           <div className="empty-state">
             <Database size={38} />
-            <p>No managed databases provisioned yet. Create PostgreSQL, Redis, MySQL, or MongoDB above.</p>
+            <p>No managed databases or storage services provisioned yet. Create PostgreSQL, MongoDB, MinIO (S3), Redis, or MySQL above.</p>
           </div>
         ) : (
           <div className="app-grid">
             {services.map((svc) => {
               const revealed = Boolean(revealedIds[svc.id]);
+              const isMinio = svc.service_type === 'minio';
               return (
                 <div key={svc.id} className="app-card">
                   <div className="app-card-header">
@@ -313,19 +340,23 @@ function Services() {
 
                   <div className="app-card-meta">
                     <span>Port: <strong>{svc.port}</strong></span>
+                    {svc.console_port && <span>Console: <strong>{svc.console_port}</strong></span>}
                     {svc.database_name && <span>DB: <strong>{svc.database_name}</strong></span>}
                     <span>RAM: <strong>{svc.memory_limit_mb} MB</strong></span>
                   </div>
 
                   <div className="service-conn-box">
                     <div className="code-block-header">
-                      <span className="form-hint">Internal Connection URL ({svc.suggested_env_key})</span>
+                      <span className="form-hint">
+                        {isMinio ? 'S3 API External URL' : 'External URL (Compass / pgAdmin / CLI)'}
+                      </span>
                       <div style={{ display: 'flex', gap: '4px' }}>
                         {canManage && (
                           <button
                             type="button"
                             className="btn btn-xs btn-secondary"
                             onClick={() => setRevealedIds((p) => ({ ...p, [svc.id]: !p[svc.id] }))}
+                            title={revealed ? 'Hide credentials' : 'Reveal credentials'}
                           >
                             {revealed ? <EyeOff size={11} /> : <Eye size={11} />}
                           </button>
@@ -333,17 +364,66 @@ function Services() {
                         <button
                           type="button"
                           className="btn btn-xs btn-secondary"
-                          onClick={() => copyValue(`int-${svc.id}`, svc.internal_url)}
+                          onClick={() => copyValue(`ext-${svc.id}`, svc.external_url)}
                           disabled={!canManage}
+                          title="Copy External URL"
                         >
-                          {copiedKey === `int-${svc.id}` ? <Check size={11} /> : <Copy size={11} />}
+                          {copiedKey === `ext-${svc.id}` ? <Check size={11} /> : <Copy size={11} />}
                         </button>
                       </div>
+                    </div>
+                    <code className="webhook-url">
+                      {revealed ? svc.external_url : svc.external_url.replace(/:([^:@]+)@/, ':••••••••@')}
+                    </code>
+                  </div>
+
+                  <div className="service-conn-box">
+                    <div className="code-block-header">
+                      <span className="form-hint">Internal Docker URL ({svc.suggested_env_key})</span>
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-secondary"
+                        onClick={() => copyValue(`int-${svc.id}`, svc.internal_url)}
+                        disabled={!canManage}
+                        title="Copy Internal URL"
+                      >
+                        {copiedKey === `int-${svc.id}` ? <Check size={11} /> : <Copy size={11} />}
+                      </button>
                     </div>
                     <code className="webhook-url">
                       {revealed ? svc.internal_url : svc.internal_url.replace(/:([^:@]+)@/, ':••••••••@')}
                     </code>
                   </div>
+
+                  {isMinio && (
+                    <div className="service-conn-box">
+                      <div className="code-block-header">
+                        <span className="form-hint">S3 Credentials &amp; Console</span>
+                        {svc.console_url && (
+                          <a
+                            href={svc.console_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="app-access-link"
+                          >
+                            Console <ExternalLink size={11} />
+                          </a>
+                        )}
+                      </div>
+                      <div className="minio-cred-grid">
+                        <div className="minio-cred-row">
+                          <span className="form-hint">Access Key</span>
+                          <code className="minio-cred-val">{svc.access_key || 'paasadmin'}</code>
+                        </div>
+                        <div className="minio-cred-row">
+                          <span className="form-hint">Secret Key</span>
+                          <code className="minio-cred-val">
+                            {revealed ? (svc.secret_key || '—') : '••••••••'}
+                          </code>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="app-card-actions">
                     {canManage && (
@@ -362,10 +442,20 @@ function Services() {
                             <Square size={13} /> Stop
                           </button>
                         )}
+                        {isMinio && (
+                          <button className="btn btn-sm btn-secondary" onClick={() => setBucketsTarget(svc)}>
+                            <HardDrive size={13} /> Buckets
+                          </button>
+                        )}
                         <button className="btn btn-sm btn-secondary" onClick={() => openAttach(svc)} disabled={apps.length === 0}>
                           <Link2 size={13} /> Attach
                         </button>
                       </>
+                    )}
+                    {!canManage && isMinio && (
+                      <button className="btn btn-sm btn-secondary" onClick={() => setBucketsTarget(svc)}>
+                        <HardDrive size={13} /> Buckets
+                      </button>
                     )}
                     <button className="btn btn-sm btn-secondary" onClick={() => openLogs(svc)}>
                       <Terminal size={13} /> Logs
@@ -397,7 +487,9 @@ function Services() {
             <form onSubmit={handleAttachSubmit}>
               <div className="modal-body">
                 <p style={{ marginBottom: '12px' }}>
-                  Injects the private Docker-network connection URL directly into the selected application&apos;s environment variables.
+                  {attachTarget.service_type === 'minio'
+                    ? 'Injects S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY, S3_REGION, and S3_FORCE_PATH_STYLE directly into the application environment.'
+                    : 'Injects the private Docker-network connection URL directly into the selected application\u2019s environment variables.'}
                 </p>
                 <div className="form-group">
                   <label className="form-label" htmlFor="attach-app">Target Application</label>
@@ -412,7 +504,7 @@ function Services() {
                     ))}
                   </select>
                 </div>
-                <div className="form-group" style={{ marginBottom: 0 }}>
+                <div className="form-group" style={{ marginBottom: attachTarget.service_type === 'minio' ? '12px' : 0 }}>
                   <label className="form-label" htmlFor="attach-key">Environment Variable Name</label>
                   <input
                     id="attach-key"
@@ -422,6 +514,34 @@ function Services() {
                     onChange={(e) => setAttachEnvKey(e.target.value)}
                   />
                 </div>
+                {attachTarget.service_type === 'minio' && (
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label" htmlFor="attach-bucket">
+                      Default Bucket <span className="form-optional">(optional, sets S3_BUCKET)</span>
+                    </label>
+                    {attachBuckets.length > 0 ? (
+                      <select
+                        id="attach-bucket"
+                        className="form-input"
+                        value={attachBucketName}
+                        onChange={(e) => setAttachBucketName(e.target.value)}
+                      >
+                        <option value="">Skip S3_BUCKET</option>
+                        {attachBuckets.map((b) => (
+                          <option key={b.name} value={b.name}>{b.name}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        id="attach-bucket"
+                        type="text"
+                        className="form-input"
+                        value={attachBucketName}
+                        onChange={(e) => setAttachBucketName(e.target.value)}
+                      />
+                    )}
+                  </div>
+                )}
               </div>
               <div className="modal-footer">
                 <button type="button" className="btn btn-secondary" onClick={() => setAttachTarget(null)}>Cancel</button>
@@ -480,6 +600,12 @@ function Services() {
           </div>
         </div>
       )}
+      <StorageBucketsModal
+        isOpen={Boolean(bucketsTarget)}
+        service={bucketsTarget}
+        canManage={canManage}
+        onClose={() => setBucketsTarget(null)}
+      />
     </div>
   );
 }

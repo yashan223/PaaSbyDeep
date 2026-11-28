@@ -117,6 +117,7 @@ CREATE TABLE IF NOT EXISTS managed_services (
   service_type    TEXT NOT NULL,
   version         TEXT NOT NULL,
   port            INTEGER NOT NULL,
+  console_port    INTEGER,
   username        TEXT DEFAULT '',
   password        TEXT NOT NULL,
   database_name   TEXT DEFAULT '',
@@ -126,6 +127,17 @@ CREATE TABLE IF NOT EXISTS managed_services (
   memory_limit_mb INTEGER DEFAULT 512,
   created_at      TIMESTAMPTZ DEFAULT NOW(),
   updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE managed_services ADD COLUMN IF NOT EXISTS console_port INTEGER;
+
+CREATE TABLE IF NOT EXISTS storage_buckets (
+  id          SERIAL PRIMARY KEY,
+  service_id  INTEGER NOT NULL REFERENCES managed_services(id) ON DELETE CASCADE,
+  name        TEXT    NOT NULL,
+  public_read BOOLEAN DEFAULT FALSE,
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (service_id, name)
 );
 
 -- Security and operational audit trail

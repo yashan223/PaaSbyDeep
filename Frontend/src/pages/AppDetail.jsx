@@ -1,7 +1,7 @@
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
-  Play, RotateCcw, Square, Pencil, Trash2, ArrowLeft, GitBranch, Globe, Clock, Github,
+  Play, RotateCcw, Square, Pencil, Trash2, ArrowLeft, GitBranch, GitCommit, Globe, Clock, Github,
   ShieldCheck, RefreshCw, FileCode2, Plus, ExternalLink, Terminal, Search, X, Copy, Check,
   Activity, HardDrive, HeartPulse,
 } from 'lucide-react';
@@ -326,6 +326,7 @@ function AppDetail() {
   const apiUrl = rawApiUrl.startsWith('/') ? `${window.location.origin}${rawApiUrl}` : rawApiUrl;
   const ipAccessUrl = buildIpAccessUrl(app.port, domainSysStatus);
   const primaryAccess = getPrimaryAppAccess(app, domains, domainSysStatus);
+  const latestCommitSha = app.last_commit_sha || deployments[0]?.commit_sha || deployments[0]?.commitSha || '';
 
   const handleCopyIpUrl = () => {
     if (!ipAccessUrl) return;
@@ -502,6 +503,16 @@ function AppDetail() {
               <span className="detail-key"><GitBranch size={13} /> Branch</span>
               <span className="detail-val">{app.branch || 'main'}</span>
             </div>
+            {latestCommitSha && (
+              <div className="detail-row">
+                <span className="detail-key"><GitCommit size={13} /> Last Commit</span>
+                <span className="detail-val">
+                  <code title={latestCommitSha}>
+                    {latestCommitSha.slice(0, 8)}
+                  </code>
+                </span>
+              </div>
+            )}
             <div className="detail-row">
               <span className="detail-key"><Globe size={13} /> Port</span>
               <span className="detail-val">{app.port || '—'}</span>

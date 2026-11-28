@@ -1,14 +1,17 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Plus, Play, RotateCcw, Square, Activity, Server, AlertTriangle, ExternalLink,
+  Plus, Play, RotateCcw, Square, Activity, Server, AlertTriangle, ExternalLink, Database, Copy, Check,
 } from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
+import CreateDatabaseModal from '../components/CreateDatabaseModal';
 import useApps from '../hooks/useApps';
+import { useAuth } from '../context/AuthContext';
 import { useWebSocket } from '../context/WebSocketContext';
 import { deployApp, restartApp, stopApp } from '../api/apps';
 import { getSystemStats } from '../api/system';
 import { getDomainSystemStatus } from '../api/domains';
+import { getServices, controlService } from '../api/services';
 import { getPrimaryAppAccess } from '../utils/appUrl';
 
 function formatBytes(bytes) {
@@ -33,16 +36,23 @@ function StatCard({ icon, label, value, color }) {
 }
 
 function Dashboard() {
+  const { user } = useAuth();
+  const canManage = user?.role === 'admin' || user?.role === 'operator';
   const { apps, setApps, loading, error, fetchApps } = useApps();
   const { connected, systemStats: wsStats, subscribe } = useWebSocket();
   const [polledStats, setPolledStats] = useState(null);
   const [sysStatus, setSysStatus] = useState(null);
+  const [services, setServices] = useState([]);
+  const [showCreateDbModal, setShowCreateDbModal] = useState(false);
+  const [dbNotice, setDbNotice] = useState('');
+  const [copiedSvcKey, setCopiedSvcKey] = useState('');
   const [actionError, setActionError] = useState('');
   const stats = wsStats || polledStats;
 
   useEffect(() => {
     void fetchApps();
     getDomainSystemStatus().then(setSysStatus).catch(() => {});
+    getServices().then((list) => setServices(Array.isArray(list) ? list : [])).catch(() => {});
   }, [fetchApps]);
 
   useEffect(() => {
@@ -79,6 +89,8 @@ function Dashboard() {
         );
       } else if (msg.type === 'apps:changed' || msg.type === 'domains:changed') {
         void fetchApps();
+      } else if (msg.type === 'services:changed') {
+        getServices().then((list) => setServices(Array.isArray(list) ? list : [])).catch(() => {});
       }
     });
   }, [subscribe, setApps, fetchApps]);
@@ -97,13 +109,45 @@ function Dashboard() {
     }
   };
 
+  const handleServiceAction = async (id, action) => {
+    setActionError('');
+    setDbNotice('');
+    try {
+      const updated = await controlService(id, action);
+      setDbNotice(`Database '${updated.name}' is now ${updated.status}.`);
+      const list = await getServices();
+      setServices(Array.isArray(list) ? list : []);
+    } catch (err) {
+      setActionError(err?.response?.data?.error || `Failed to ${action} database.`);
+    }
+  };
+
+  const handleCopyDbUrl = (key, value) => {
+    if (!value) return;
+    navigator.clipboard?.writeText(value).then(() => {
+      setCopiedSvcKey(key);
+      setTimeout(() => setCopiedSvcKey(''), 2000);
+    }).catch(() => {});
+  };
+
   return (
     <div className="page">
       <div className="page-header">
         <h2 className="page-heading">Overview</h2>
-        <Link to="/apps/new" className="btn btn-primary">
-          <Plus size={15} /> New Application
-        </Link>
+        <div className="action-btns">
+          {canManage && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setShowCreateDbModal(true)}
+            >
+              <Database size={15} /> Create Database
+            </button>
+          )}
+          <Link to="/apps/new" className="btn btn-primary">
+            <Plus size={15} /> New Application
+          </Link>
+        </div>
       </div>
 
       <div className="stat-cards">
@@ -124,6 +168,12 @@ function Dashboard() {
           label="Failed"
           value={failedApps}
           color="var(--danger)"
+        />
+        <StatCard
+          icon={<Database size={22} />}
+          label="Databases"
+          value={services.length}
+          color="var(--info-text)"
         />
       </div>
 
@@ -275,6 +325,132 @@ function Dashboard() {
           </div>
         )}
       </div>
+
+      <div className="section">
+        <div className="section-header-row">
+          <h3 className="section-title" style={{ marginBottom: 0 }}>Databases</h3>
+          <div className="action-btns">
+            {canManage && (
+              <button
+                type="button"
+                className="btn btn-xs btn-primary"
+                onClick={() => setShowCreateDbModal(true)}
+              >
+                <Plus size={12} /> Create Database
+              </button>
+            )}
+            <Link to="/databases" className="btn btn-xs btn-secondary">
+              Manage All
+            </Link>
+          </div>
+        </div>
+
+        {dbNotice && <div className="alert alert-success" style={{ marginBottom: '12px' }}>{dbNotice}</div>}
+
+        {services.length === 0 ? (
+          <div className="empty-state">
+            <Database size={36} />
+            <p>No managed databases yet. Spin up PostgreSQL or MongoDB in seconds.</p>
+            {canManage && (
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => setShowCreateDbModal(true)}
+              >
+                <Database size={14} /> Create Database
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="table-wrapper">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Engine</th>
+                  <th>Status</th>
+                  <th>Host : Port</th>
+                  <th>Connection URL</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {services.map((svc) => (
+                  <tr key={svc.id}>
+                    <td>
+                      <Link to="/databases" className="table-link">{svc.name}</Link>
+                    </td>
+                    <td><span className="project-type-pill">{svc.service_type}</span></td>
+                    <td><StatusBadge status={svc.status} /></td>
+                    <td><code>{svc.public_host || svc.container_hostname}:{svc.port}</code></td>
+                    <td>
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-secondary"
+                        onClick={() => handleCopyDbUrl(`dash-${svc.id}`, svc.external_url)}
+                        disabled={!canManage}
+                        title="Copy connection string"
+                      >
+                        {copiedSvcKey === `dash-${svc.id}`
+                          ? <><Check size={11} /> Copied</>
+                          : <><Copy size={11} /> Copy URL</>}
+                      </button>
+                    </td>
+                    <td>
+                      {canManage && (
+                        <div className="action-btns">
+                          {svc.status !== 'running' ? (
+                            <button
+                              type="button"
+                              className="btn btn-xs btn-primary"
+                              title="Start"
+                              onClick={() => handleServiceAction(svc.id, 'start')}
+                            >
+                              <Play size={12} />
+                            </button>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                className="btn btn-xs btn-secondary"
+                                title="Restart"
+                                onClick={() => handleServiceAction(svc.id, 'restart')}
+                              >
+                                <RotateCcw size={12} />
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-xs btn-danger"
+                                title="Stop"
+                                onClick={() => handleServiceAction(svc.id, 'stop')}
+                              >
+                                <Square size={12} />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <CreateDatabaseModal
+        isOpen={showCreateDbModal}
+        onClose={() => setShowCreateDbModal(false)}
+        onCreated={(res) => {
+          setDbNotice(
+            res?.startError
+              ? `Database '${res.service.name}' created, but failed to start: ${res.startError}`
+              : `Database '${res?.service?.name}' (${res?.service?.service_type}) created on port ${res?.service?.port}.`
+          );
+          getServices().then((list) => setServices(Array.isArray(list) ? list : [])).catch(() => {});
+        }}
+      />
     </div>
   );
 }

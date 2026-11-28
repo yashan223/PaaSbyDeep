@@ -833,11 +833,153 @@
   color: var(--text-secondary);
 }
 
+.service-form-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
+.service-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1 1 180px;
+  min-width: 150px;
+}
+
+.service-form-field--sm {
+  flex: 0.7 1 120px;
+  min-width: 110px;
+}
+
+.service-form-submit {
+  display: flex;
+  align-items: flex-end;
+  flex-shrink: 0;
+}
+
+.service-form-row .form-input,
+.service-form-row .btn {
+  height: 42px;
+}
+
 .service-conn-box {
   background: var(--bg-primary);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 8px 10px;
+}
+
+.minio-cred-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.minio-cred-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.minio-cred-val {
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 12px;
+  color: var(--text-terminal);
+  word-break: break-all;
+}
+
+.bucket-endpoint-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 14px;
+}
+
+.bucket-create-form {
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.bucket-create-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.bucket-create-input-wrap {
+  flex: 1 1 220px;
+  min-width: 180px;
+}
+
+.bucket-create-row .btn {
+  height: 42px;
+}
+
+.bucket-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bucket-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.bucket-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.bucket-row-name {
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.bucket-access-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.bucket-access-pill--public {
+  background: var(--info-pill-bg);
+  color: var(--info-text);
+}
+
+.bucket-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
 }
 
 /* ---- Interactive Container Terminal ----------------------- */

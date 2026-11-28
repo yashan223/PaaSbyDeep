@@ -10,6 +10,12 @@ import {
   SHARED_DOCKER_NETWORK,
 } from './docker.js';
 import { getServerPublicIps } from './domainManager.js';
+import {
+  isValidBucketName,
+  listMinioBuckets,
+  createMinioBucket,
+  deleteMinioBucket,
+} from './minioS3.js';
 
 export const SERVICE_TEMPLATES = {
   postgres: {
@@ -22,6 +28,29 @@ export const SERVICE_TEMPLATES = {
     defaultUsername: 'paas',
     defaultDatabase: 'appdb',
     envKey: 'DATABASE_URL',
+  },
+  mongodb: {
+    label: 'MongoDB',
+    image: 'mongo:7',
+    version: '7',
+    defaultPort: 27017,
+    containerPort: 27017,
+    dataPath: '/data/db',
+    defaultUsername: 'paas',
+    defaultDatabase: 'appdb',
+    envKey: 'MONGODB_URI',
+  },
+  minio: {
+    label: 'MinIO (S3 Storage)',
+    image: 'minio/minio:latest',
+    version: 'latest',
+    defaultPort: 9000,
+    containerPort: 9000,
+    defaultConsolePort: 9001,
+    dataPath: '/data',
+    defaultUsername: 'paasadmin',
+    defaultDatabase: '',
+    envKey: 'S3_ENDPOINT',
   },
   redis: {
     label: 'Redis',
@@ -44,17 +73,6 @@ export const SERVICE_TEMPLATES = {
     defaultUsername: 'paas',
     defaultDatabase: 'appdb',
     envKey: 'DATABASE_URL',
-  },
-  mongodb: {
-    label: 'MongoDB',
-    image: 'mongo:7',
-    version: '7',
-    defaultPort: 27017,
-    containerPort: 27017,
-    dataPath: '/data/db',
-    defaultUsername: 'paas',
-    defaultDatabase: 'appdb',
-    envKey: 'MONGODB_URI',
   },
 };
 
@@ -130,12 +148,21 @@ function buildContainerEnv(type, username, password, databaseName) {
       `MONGO_INITDB_DATABASE=${databaseName || 'appdb'}`,
     ];
   }
+  if (type === 'minio') {
+    return [
+      `MINIO_ROOT_USER=${username || 'paasadmin'}`,
+      `MINIO_ROOT_PASSWORD=${password}`,
+    ];
+  }
   return [];
 }
 
 function buildContainerCmd(type, password) {
   if (type === 'redis' && password) {
     return ['redis-server', '--appendonly', 'yes', '--requirepass', password];
+  }
+  if (type === 'minio') {
+    return ['server', '/data', '--console-address', ':9001'];
   }
   return undefined;
 }
@@ -160,6 +187,9 @@ export function buildConnectionString(service, host, port, { maskSecret = false 
   if (service.service_type === 'mongodb') {
     return `mongodb://${encUser}:${encPass}@${host}:${port}/${db}?authSource=admin`;
   }
+  if (service.service_type === 'minio') {
+    return `http://${host}:${port}`;
+  }
   return '';
 }
 
@@ -167,11 +197,20 @@ export function serializeService(service, publicHost = 'localhost', role = 'admi
   const tpl = SERVICE_TEMPLATES[service.service_type] || {};
   const isViewer = role === 'viewer';
   const containerHost = getContainerName(service);
+  const rawPass = decryptSecret(service.password) || '';
   const { password, ...rest } = service;
   void password;
 
+  const consoleUrl = service.service_type === 'minio' && service.console_port
+    ? `http://${publicHost}:${service.console_port}`
+    : null;
+
   return {
     ...rest,
+    public_host: publicHost,
+    console_url: consoleUrl,
+    access_key: service.service_type === 'minio' ? (isViewer ? '••••••••' : (service.username || 'paasadmin')) : undefined,
+    secret_key: service.service_type === 'minio' ? (isViewer ? '••••••••' : rawPass) : undefined,
     suggested_env_key: tpl.envKey || 'SERVICE_URL',
     container_hostname: containerHost,
     internal_url: buildConnectionString(service, containerHost, tpl.containerPort || service.port, {
@@ -183,11 +222,13 @@ export function serializeService(service, publicHost = 'localhost', role = 'admi
   };
 }
 
-async function allocateServicePort(sql, requestedPort, defaultPort) {
+async function allocateServicePort(sql, requestedPort, defaultPort, extraUsedPorts = []) {
+  const extraSet = new Set(extraUsedPorts.map(Number));
   if (requestedPort !== undefined && requestedPort !== null && requestedPort !== '') {
     const safe = sanitizePort(requestedPort);
     if (!safe) throw new Error('Port must be between 1024 and 65535.');
-    const svcClash = await sql`SELECT id FROM managed_services WHERE port = ${safe}`;
+    if (extraSet.has(safe)) throw new Error(`Port ${safe} conflicts with another assigned port.`);
+    const svcClash = await sql`SELECT id FROM managed_services WHERE port = ${safe} OR console_port = ${safe}`;
     const appClash = await sql`SELECT id FROM applications WHERE port = ${safe}`;
     if (svcClash.length > 0 || appClash.length > 0) {
       throw new Error(`Port ${safe} is already assigned to another service or application.`);
@@ -198,9 +239,11 @@ async function allocateServicePort(sql, requestedPort, defaultPort) {
   const usedRows = await sql`
     SELECT port FROM managed_services
     UNION
+    SELECT console_port AS port FROM managed_services WHERE console_port IS NOT NULL
+    UNION
     SELECT port FROM applications
   `;
-  const used = new Set(usedRows.map((r) => Number(r.port)));
+  const used = new Set([...usedRows.map((r) => Number(r.port)), ...extraSet]);
   let candidate = defaultPort;
   while (used.has(candidate) && candidate < 65000) {
     candidate += 1;
@@ -235,13 +278,21 @@ async function createAndStartServiceContainer(service, plainPassword) {
   const cmd = buildContainerCmd(service.service_type, plainPassword);
   const memBytes = Math.max(128, Number(service.memory_limit_mb) || 512) * 1024 * 1024;
 
+  const portBindings = { [portKey]: [{ HostPort: String(service.port) }] };
+  const exposedPorts = { [portKey]: {} };
+  if (service.service_type === 'minio' && service.console_port) {
+    const consoleKey = '9001/tcp';
+    exposedPorts[consoleKey] = {};
+    portBindings[consoleKey] = [{ HostPort: String(service.console_port) }];
+  }
+
   const createOptions = {
     name: cname,
     Image: tpl.image,
     Env: env,
-    ExposedPorts: { [portKey]: {} },
+    ExposedPorts: exposedPorts,
     HostConfig: {
-      PortBindings: { [portKey]: [{ HostPort: String(service.port) }] },
+      PortBindings: portBindings,
       Binds: [`${service.volume_name}:${tpl.dataPath}`],
       RestartPolicy: { Name: 'unless-stopped' },
       Memory: memBytes,
@@ -311,19 +362,22 @@ export async function createManagedService({
 
   const sql = getDb();
   const assignedPort = await allocateServicePort(sql, port, tpl.defaultPort);
+  const consolePort = tpl.defaultConsolePort
+    ? await allocateServicePort(sql, null, tpl.defaultConsolePort, [assignedPort])
+    : null;
   const plainPassword = generatePassword(24);
   const encryptedPassword = encryptSecret(plainPassword);
   const volumeName = `paasbydeeep-svc-vol-${safeName}`;
-  const cleanDbName = safeType === 'redis'
+  const cleanDbName = safeType === 'redis' || safeType === 'minio'
     ? ''
     : String(databaseName || tpl.defaultDatabase).replace(/[^a-zA-Z0-9_]/g, '').slice(0, 40) || tpl.defaultDatabase;
 
   const rows = await sql`
     INSERT INTO managed_services (
-      name, service_type, version, port, username, password, database_name, volume_name, status, memory_limit_mb
+      name, service_type, version, port, console_port, username, password, database_name, volume_name, status, memory_limit_mb
     )
     VALUES (
-      ${safeName}, ${safeType}, ${tpl.version}, ${assignedPort},
+      ${safeName}, ${safeType}, ${tpl.version}, ${assignedPort}, ${consolePort},
       ${tpl.defaultUsername}, ${encryptedPassword}, ${cleanDbName},
       ${volumeName}, ${autoStart ? 'starting' : 'stopped'}, ${memMb}
     )
@@ -449,13 +503,13 @@ export async function deleteManagedService(id, removeVolume = false) {
   if (!rows[0]) throw new Error('Managed service not found.');
   const service = rows[0];
 
-  const found = await findServiceContainer(service);
-  if (found) {
-    try {
+  try {
+    const found = await findServiceContainer(service);
+    if (found) {
       if (found.info.State?.Running) await found.container.stop({ t: 10 });
       await found.container.remove({ force: true });
-    } catch {
     }
+  } catch {
   }
 
   if (removeVolume && service.volume_name) {
@@ -468,4 +522,119 @@ export async function deleteManagedService(id, removeVolume = false) {
   await sql`DELETE FROM managed_services WHERE id = ${id}`;
   broadcast({ type: 'services:changed', action: 'deleted', serviceId: service.id });
   return service;
+}
+
+export async function listServiceBuckets(serviceId) {
+  const sql = getDb();
+  const rows = await sql`SELECT * FROM managed_services WHERE id = ${serviceId}`;
+  if (!rows[0]) throw new Error('Managed service not found.');
+  const service = rows[0];
+  if (service.service_type !== 'minio') {
+    throw new Error('Bucket management is only available for MinIO object storage services.');
+  }
+
+  const dbBuckets = await sql`
+    SELECT id, name, public_read, created_at FROM storage_buckets WHERE service_id = ${serviceId} ORDER BY name ASC
+  `;
+  const byName = new Map(dbBuckets.map((b) => [b.name, b]));
+
+  const accessKey = service.username || 'paasadmin';
+  const secretKey = decryptSecret(service.password) || '';
+  let liveSync = false;
+  let syncWarning = null;
+
+  try {
+    const found = await findServiceContainer(service);
+    if (found?.info?.State?.Running) {
+      const liveBuckets = await listMinioBuckets({
+        endpoint: `http://127.0.0.1:${service.port}`,
+        accessKey,
+        secretKey,
+      });
+      liveSync = true;
+      for (const lb of liveBuckets) {
+        if (!byName.has(lb.name)) {
+          const ins = await sql`
+            INSERT INTO storage_buckets (service_id, name, public_read)
+            VALUES (${serviceId}, ${lb.name}, false)
+            ON CONFLICT (service_id, name) DO NOTHING
+            RETURNING id, name, public_read, created_at
+          `;
+          if (ins[0]) byName.set(lb.name, ins[0]);
+        }
+      }
+    } else {
+      syncWarning = 'MinIO container is stopped; showing stored bucket metadata.';
+    }
+  } catch (err) {
+    syncWarning = err.message;
+  }
+
+  return {
+    buckets: [...byName.values()].sort((a, b) => a.name.localeCompare(b.name)),
+    liveSync,
+    syncWarning,
+  };
+}
+
+export async function createServiceBucket(serviceId, { name, publicRead = false }) {
+  const safeName = String(name || '').trim().toLowerCase();
+  if (!isValidBucketName(safeName)) {
+    throw new Error('Bucket name must be 3-63 characters using lowercase letters, numbers, and hyphens.');
+  }
+
+  const sql = getDb();
+  const rows = await sql`SELECT * FROM managed_services WHERE id = ${serviceId}`;
+  if (!rows[0]) throw new Error('Managed service not found.');
+  const service = rows[0];
+  if (service.service_type !== 'minio') {
+    throw new Error('Bucket creation is only available for MinIO services.');
+  }
+
+  const found = await findServiceContainer(service);
+  if (!found?.info?.State?.Running) {
+    throw new Error('Start the MinIO container first before creating storage buckets.');
+  }
+
+  const accessKey = service.username || 'paasadmin';
+  const secretKey = decryptSecret(service.password) || '';
+  await createMinioBucket({
+    endpoint: `http://127.0.0.1:${service.port}`,
+    accessKey,
+    secretKey,
+    bucketName: safeName,
+    publicRead: Boolean(publicRead),
+  });
+
+  const inserted = await sql`
+    INSERT INTO storage_buckets (service_id, name, public_read)
+    VALUES (${serviceId}, ${safeName}, ${Boolean(publicRead)})
+    ON CONFLICT (service_id, name)
+    DO UPDATE SET public_read = ${Boolean(publicRead)}
+    RETURNING id, name, public_read, created_at
+  `;
+  return { bucket: inserted[0], service };
+}
+
+export async function deleteServiceBucket(serviceId, bucketName) {
+  const safeName = String(bucketName || '').trim().toLowerCase();
+  const sql = getDb();
+  const rows = await sql`SELECT * FROM managed_services WHERE id = ${serviceId}`;
+  if (!rows[0]) throw new Error('Managed service not found.');
+  const service = rows[0];
+
+  const found = await findServiceContainer(service);
+  if (found?.info?.State?.Running) {
+    const accessKey = service.username || 'paasadmin';
+    const secretKey = decryptSecret(service.password) || '';
+    await deleteMinioBucket({
+      endpoint: `http://127.0.0.1:${service.port}`,
+      accessKey,
+      secretKey,
+      bucketName: safeName,
+    });
+  }
+
+  await sql`DELETE FROM storage_buckets WHERE service_id = ${serviceId} AND name = ${safeName}`;
+  return { bucketName: safeName, service };
 }

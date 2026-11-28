@@ -12,8 +12,21 @@ export const controlService = (id, action) =>
 export const getServiceLogs = (id, tail = 200) =>
   client.get(`/services/${id}/logs`, { params: { tail } }).then((r) => r.data);
 
-export const attachServiceToApp = (id, appId, envKey) =>
-  client.post(`/services/${id}/attach`, { appId, envKey }).then((r) => r.data);
+export const attachServiceToApp = (id, appId, envKey, bucketName = '') =>
+  client.post(`/services/${id}/attach`, {
+    appId,
+    envKey,
+    bucketName: bucketName || undefined,
+  }).then((r) => r.data);
+
+export const listServiceBuckets = (id) =>
+  client.get(`/services/${id}/buckets`).then((r) => r.data);
+
+export const createServiceBucket = (id, payload) =>
+  client.post(`/services/${id}/buckets`, payload).then((r) => r.data);
+
+export const deleteServiceBucket = (id, bucketName) =>
+  client.delete(`/services/${id}/buckets/${encodeURIComponent(bucketName)}`).then((r) => r.data);
 
 export const deleteService = (id, removeVolume = false) =>
   client.delete(`/services/${id}`, { params: { removeVolume: String(removeVolume) } }).then((r) => r.data);

@@ -11,6 +11,9 @@ import {
   getManagedServiceLogs,
   deleteManagedService,
   serializeService,
+  listServiceBuckets,
+  createServiceBucket,
+  deleteServiceBucket,
 } from '../services/serviceManager.js';
 import { getServerPublicIps } from '../services/domainManager.js';
 
@@ -114,7 +117,24 @@ router.post('/:id/attach', requireRole('admin', 'operator'), async (req, res) =>
     const currentEnv = typeof appRows[0].env_vars === 'object' && appRows[0].env_vars !== null
       ? { ...appRows[0].env_vars }
       : {};
-    currentEnv[envKey] = serialized.internal_url;
+
+    const addedKeys = [];
+    if (svcRows[0].service_type === 'minio') {
+      currentEnv[envKey] = serialized.internal_url;
+      currentEnv.S3_ACCESS_KEY = serialized.access_key || 'paasadmin';
+      currentEnv.S3_SECRET_KEY = serialized.secret_key || '';
+      currentEnv.S3_REGION = 'us-east-1';
+      currentEnv.S3_FORCE_PATH_STYLE = 'true';
+      addedKeys.push(envKey, 'S3_ACCESS_KEY', 'S3_SECRET_KEY', 'S3_REGION', 'S3_FORCE_PATH_STYLE');
+      const bucketName = String(req.body?.bucketName || '').trim().toLowerCase();
+      if (bucketName) {
+        currentEnv.S3_BUCKET = bucketName;
+        addedKeys.push('S3_BUCKET');
+      }
+    } else {
+      currentEnv[envKey] = serialized.internal_url;
+      addedKeys.push(envKey);
+    }
 
     await sql`
       UPDATE applications SET env_vars = ${JSON.stringify(currentEnv)}::jsonb, updated_at = NOW()
@@ -128,16 +148,71 @@ router.post('/:id/attach', requireRole('admin', 'operator'), async (req, res) =>
       targetType: 'application',
       targetId: appId,
       targetName: appRows[0].name,
-      details: { serviceName: svcRows[0].name, envKey },
+      details: { serviceName: svcRows[0].name, keys: addedKeys },
     });
 
     return res.json({
-      message: `Added ${envKey} from '${svcRows[0].name}' into '${appRows[0].name}'. Redeploy the app to apply changes.`,
+      message: `Injected ${addedKeys.join(', ')} from '${svcRows[0].name}' into '${appRows[0].name}'. Redeploy the app to apply changes.`,
       envKey,
+      addedKeys,
     });
   } catch (err) {
     console.error('[Services] Attach error:', err.message);
     return res.status(500).json({ error: 'Failed to attach service to application.' });
+  }
+});
+
+router.get('/:id/buckets', async (req, res) => {
+  const serviceId = parseId(req.params.id);
+  if (!serviceId) return res.status(400).json({ error: 'Invalid service ID.' });
+
+  try {
+    const result = await listServiceBuckets(serviceId);
+    return res.json(result);
+  } catch (err) {
+    return res.status(400).json({ error: err.message || 'Failed to load storage buckets.' });
+  }
+});
+
+router.post('/:id/buckets', requireRole('admin', 'operator'), async (req, res) => {
+  const serviceId = parseId(req.params.id);
+  if (!serviceId) return res.status(400).json({ error: 'Invalid service ID.' });
+
+  try {
+    const { bucket, service } = await createServiceBucket(serviceId, {
+      name: req.body?.name,
+      publicRead: Boolean(req.body?.publicRead),
+    });
+    void recordAudit({
+      req,
+      action: 'storage.bucket_create',
+      targetType: 'service',
+      targetId: service.id,
+      targetName: `${service.name}/${bucket.name}`,
+      details: { publicRead: bucket.public_read },
+    });
+    return res.status(201).json(bucket);
+  } catch (err) {
+    return res.status(400).json({ error: err.message || 'Failed to create storage bucket.' });
+  }
+});
+
+router.delete('/:id/buckets/:bucketName', requireRole('admin', 'operator'), async (req, res) => {
+  const serviceId = parseId(req.params.id);
+  if (!serviceId) return res.status(400).json({ error: 'Invalid service ID.' });
+
+  try {
+    const { bucketName, service } = await deleteServiceBucket(serviceId, req.params.bucketName);
+    void recordAudit({
+      req,
+      action: 'storage.bucket_delete',
+      targetType: 'service',
+      targetId: service.id,
+      targetName: `${service.name}/${bucketName}`,
+    });
+    return res.json({ message: `Bucket '${bucketName}' deleted.` });
+  } catch (err) {
+    return res.status(400).json({ error: err.message || 'Failed to delete storage bucket.' });
   }
 });
 
