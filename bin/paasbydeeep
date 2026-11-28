@@ -171,6 +171,14 @@ cmd_update() {
   cd "${install_dir}/Backend"
   npm install --omit=dev
 
+  if command -v docker >/dev/null 2>&1 && docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx paasbydeeep-db; then
+    if [[ "$(docker inspect --format '{{.State.Running}}' paasbydeeep-db 2>/dev/null || echo false)" != "true" ]]; then
+      log_info "Starting Docker PostgreSQL container (paasbydeeep-db)..."
+      docker start paasbydeeep-db >/dev/null || true
+      sleep 2
+    fi
+  fi
+
   log_info "Applying database migrations..."
   npm run db:migrate
 
@@ -250,8 +258,14 @@ cmd_status() {
     fi
   fi
 
-  if systemctl is-active --quiet postgresql 2>/dev/null; then
-    echo -e "  PostgreSQL   : ${GREEN}Active${NC} (local)"
+  if command -v docker >/dev/null 2>&1 && docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx paasbydeeep-db; then
+    if [[ "$(docker inspect --format '{{.State.Running}}' paasbydeeep-db 2>/dev/null || echo false)" == "true" ]]; then
+      echo -e "  PostgreSQL   : ${GREEN}Active${NC} (Docker: paasbydeeep-db)"
+    else
+      echo -e "  PostgreSQL   : ${RED}Stopped${NC} (Docker: paasbydeeep-db)"
+    fi
+  elif systemctl is-active --quiet postgresql 2>/dev/null; then
+    echo -e "  PostgreSQL   : ${GREEN}Active${NC} (host systemd)"
   fi
 
   echo ""
@@ -303,6 +317,10 @@ cmd_doctor() {
   echo "PM2     : $(pm2 -v 2>/dev/null || echo 'MISSING')"
   echo -n "Docker  : "
   if docker info >/dev/null 2>&1; then echo "OK"; else echo "FAILED"; fi
+
+  if command -v docker >/dev/null 2>&1 && docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx paasbydeeep-db; then
+    echo "Dash DB : $(docker inspect --format '{{.State.Status}}' paasbydeeep-db 2>/dev/null || echo unknown) (Docker: paasbydeeep-db)"
+  fi
 
   echo -n "DB Conn : "
   if (

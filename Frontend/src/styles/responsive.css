@@ -228,6 +228,10 @@
   .terminal-input-row {
     flex-wrap: wrap;
   }
+
+  .service-card-actions {
+    flex-wrap: wrap;
+  }
 }
 
 @media (max-width: 540px) {

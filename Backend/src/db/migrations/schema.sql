@@ -124,12 +124,14 @@ CREATE TABLE IF NOT EXISTS managed_services (
   volume_name     TEXT NOT NULL,
   container_id    TEXT,
   status          TEXT DEFAULT 'stopped',
+  last_error      TEXT DEFAULT '',
   memory_limit_mb INTEGER DEFAULT 512,
   created_at      TIMESTAMPTZ DEFAULT NOW(),
   updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
 ALTER TABLE managed_services ADD COLUMN IF NOT EXISTS console_port INTEGER;
+ALTER TABLE managed_services ADD COLUMN IF NOT EXISTS last_error TEXT DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS storage_buckets (
   id          SERIAL PRIMARY KEY,

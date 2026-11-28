@@ -111,12 +111,12 @@ run_uninstall() {
   echo ""
   echo -e "${YELLOW}This will completely remove PaaSbyDeep from: ${UNINSTALL_DIR}${NC}"
   echo "  - Stop & delete PM2 service (paasbydeeep-backend)"
-  echo "  - Delete all paasbydeeep-* Docker containers & images"
+  echo "  - Delete all paasbydeeep-* Docker containers, images & dashboard DB volume"
   echo "  - Remove PaaSbyDeep Nginx configs & Certbot SSL certs"
   echo "  - Drop PaaSbyDeep database / tables"
   echo "  - Remove CLI (/usr/local/bin/paasbydeeep), /var/www/paasbydeeep, logs & ${UNINSTALL_DIR}"
   if [[ "$PURGE_DEPS" == "true" ]]; then
-    echo "  - Purge PM2, Nginx, Certbot, Docker Engine, and local PostgreSQL packages"
+    echo "  - Purge PM2, Nginx, Certbot & Docker Engine packages"
   fi
 
   if [[ "$AUTO_YES" != "true" ]]; then
@@ -251,8 +251,14 @@ run_uninstall() {
     )
 
     if [[ "$DB_HOST" == "127.0.0.1" || "$DB_HOST" == "localhost" ]]; then
-      if command -v psql >/dev/null 2>&1; then
-        log_info "Dropping local PostgreSQL database '${DB_NAME}' and role '${DB_USER}'..."
+      if command -v docker >/dev/null 2>&1 && docker volume inspect paasbydeeep-db-data >/dev/null 2>&1; then
+        log_info "Removing Docker dashboard database volume 'paasbydeeep-db-data'..."
+        docker volume rm -f paasbydeeep-db-data >/dev/null 2>&1 || true
+        log_ok "Removed Docker dashboard database volume."
+      fi
+
+      if command -v psql >/dev/null 2>&1 && systemctl is-active --quiet postgresql 2>/dev/null; then
+        log_info "Dropping legacy host PostgreSQL database '${DB_NAME}' and role '${DB_USER}'..."
         if [[ "$DB_NAME" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
           su - postgres -c "psql -v ON_ERROR_STOP=0 -c \"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='${DB_NAME}' AND pid <> pg_backend_pid();\"" >/dev/null 2>&1 || true
           su - postgres -c "psql -v ON_ERROR_STOP=0 -c \"DROP DATABASE IF EXISTS ${DB_NAME};\"" >/dev/null 2>&1 || true
@@ -260,15 +266,15 @@ run_uninstall() {
         if [[ "$DB_USER" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ && "$DB_USER" != "postgres" ]]; then
           su - postgres -c "psql -v ON_ERROR_STOP=0 -c \"DROP ROLE IF EXISTS ${DB_USER};\"" >/dev/null 2>&1 || true
         fi
-        log_ok "Dropped local PostgreSQL database and role."
+        log_ok "Dropped legacy host PostgreSQL database and role."
       fi
 
-      if [[ "$PURGE_DEPS" == "true" ]]; then
+      if [[ "$PURGE_DEPS" == "true" ]] && command -v psql >/dev/null 2>&1; then
         systemctl stop postgresql >/dev/null 2>&1 || true
         DEBIAN_FRONTEND=noninteractive apt-get purge -y 'postgresql*' >/dev/null 2>&1 || true
         apt-get autoremove -y >/dev/null 2>&1 || true
         rm -rf /etc/postgresql /var/lib/postgresql
-        log_ok "PostgreSQL server purged."
+        log_ok "Legacy host PostgreSQL server purged."
       fi
     elif [[ -d "${UNINSTALL_DIR}/Backend/node_modules" ]]; then
       log_info "Dropping PaaSbyDeep tables from database (${DB_HOST})..."
@@ -278,7 +284,7 @@ run_uninstall() {
           import { initDb, getDb, closeDb } from './src/db/database.js';
           await initDb();
           const sql = getDb();
-          await sql\`DROP TABLE IF EXISTS domains, deployments, github_connections, applications, platform_settings, users CASCADE\`;
+          await sql\`DROP TABLE IF EXISTS audit_logs, storage_buckets, managed_services, domains, deployments, github_connections, applications, platform_settings, users CASCADE\`;
           await closeDb();
         "
       ) && log_ok "Dropped PaaSbyDeep tables from external database." || log_warn "Could not drop external tables automatically."
@@ -341,7 +347,7 @@ fi
 
 echo ""
 echo "Select database setup:"
-echo "  1) Install & configure local PostgreSQL on this VPS (recommended)"
+echo "  1) Install & configure local PostgreSQL via Docker container (recommended)"
 echo "  2) Connect existing Neon DB or external PostgreSQL URL"
 DB_CHOICE=""
 while [[ "$DB_CHOICE" != "1" && "$DB_CHOICE" != "2" ]]; do
@@ -490,25 +496,56 @@ if [[ "$ADMIN_PASS_AUTOGEN" == "true" ]]; then
   ADMIN_PASSWORD="$(openssl rand -base64 14 | tr -dc 'A-Za-z0-9' | head -c 16)"
 fi
 
-# ---- Local PostgreSQL Setup (if selected) -----------------
+# ---- Local PostgreSQL Setup in Docker (if selected) -------
 if [[ "$DB_CHOICE" == "1" ]]; then
   if [[ -z "$PG_DB_PASS" ]]; then
     PG_DB_PASS="$(openssl rand -base64 20 | tr -dc 'A-Za-z0-9' | head -c 24)"
   fi
 
-  log_info "Installing & configuring local PostgreSQL..."
-  apt-get install -y postgresql postgresql-contrib
-  systemctl enable --now postgresql
+  DASH_DB_CONTAINER="paasbydeeep-db"
+  DASH_DB_VOLUME="paasbydeeep-db-data"
+  DASH_DB_PORT=5432
 
-  for _ in {1..15}; do
-    if pg_isready -h 127.0.0.1 -p 5432 >/dev/null 2>&1; then
+  if docker ps -a --format '{{.Names}}' | grep -qx "$DASH_DB_CONTAINER"; then
+    log_info "Reusing existing Docker PostgreSQL container '${DASH_DB_CONTAINER}'..."
+    if [[ "$(docker inspect --format '{{.State.Running}}' "$DASH_DB_CONTAINER" 2>/dev/null || echo false)" != "true" ]]; then
+      docker start "$DASH_DB_CONTAINER" >/dev/null
+    fi
+    EXISTING_PORT="$(docker inspect --format '{{(index (index .HostConfig.PortBindings "5432/tcp") 0).HostPort}}' "$DASH_DB_CONTAINER" 2>/dev/null || true)"
+    if [[ "$EXISTING_PORT" =~ ^[0-9]+$ ]]; then
+      DASH_DB_PORT="$EXISTING_PORT"
+    fi
+  else
+    while ss -tln 2>/dev/null | grep -qE ":${DASH_DB_PORT}\b"; do
+      DASH_DB_PORT=$((DASH_DB_PORT + 1))
+    done
+
+    log_info "Starting local PostgreSQL in Docker (${DASH_DB_CONTAINER}, postgres:16-alpine) on 127.0.0.1:${DASH_DB_PORT}..."
+    docker pull postgres:16-alpine
+    docker volume create "$DASH_DB_VOLUME" >/dev/null
+    docker run -d \
+      --name "$DASH_DB_CONTAINER" \
+      --restart unless-stopped \
+      -p "127.0.0.1:${DASH_DB_PORT}:5432" \
+      -e "POSTGRES_USER=${PG_DB_USER}" \
+      -e "POSTGRES_PASSWORD=${PG_DB_PASS}" \
+      -e "POSTGRES_DB=${PG_DB_NAME}" \
+      -v "${DASH_DB_VOLUME}:/var/lib/postgresql/data" \
+      postgres:16-alpine >/dev/null
+  fi
+
+  CONTAINER_SUPERUSER="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$DASH_DB_CONTAINER" 2>/dev/null | grep '^POSTGRES_USER=' | head -n 1 | cut -d= -f2- || true)"
+  CONTAINER_SUPERUSER="${CONTAINER_SUPERUSER:-postgres}"
+
+  for _ in {1..30}; do
+    if docker exec "$DASH_DB_CONTAINER" pg_isready -U "$CONTAINER_SUPERUSER" -d postgres >/dev/null 2>&1; then
       break
     fi
     sleep 1
   done
 
   ESC_PASS="${PG_DB_PASS//\'/\'\'}"
-  su - postgres -c "psql -v ON_ERROR_STOP=1" <<SQL
+  docker exec -i "$DASH_DB_CONTAINER" psql -U "$CONTAINER_SUPERUSER" -d postgres -v ON_ERROR_STOP=1 <<SQL
 DO \$\$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${PG_DB_USER}') THEN
@@ -520,14 +557,14 @@ END
 \$\$;
 SQL
 
-  DB_EXISTS="$(su - postgres -c "psql -tAc \"SELECT 1 FROM pg_database WHERE datname='${PG_DB_NAME}'\"")"
+  DB_EXISTS="$(docker exec "$DASH_DB_CONTAINER" psql -U "$CONTAINER_SUPERUSER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='${PG_DB_NAME}'" | tr -d '[:space:]')"
   if [[ "$DB_EXISTS" != "1" ]]; then
-    su - postgres -c "createdb -O '${PG_DB_USER}' '${PG_DB_NAME}'"
+    docker exec "$DASH_DB_CONTAINER" createdb -U "$CONTAINER_SUPERUSER" -O "${PG_DB_USER}" "${PG_DB_NAME}"
   fi
 
   ENCODED_DB_PASS="$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$PG_DB_PASS")"
-  DATABASE_URL="postgresql://${PG_DB_USER}:${ENCODED_DB_PASS}@127.0.0.1:5432/${PG_DB_NAME}?sslmode=disable"
-  log_ok "Local PostgreSQL database '${PG_DB_NAME}' ready."
+  DATABASE_URL="postgresql://${PG_DB_USER}:${ENCODED_DB_PASS}@127.0.0.1:${DASH_DB_PORT}/${PG_DB_NAME}?sslmode=disable"
+  log_ok "Docker PostgreSQL database '${PG_DB_NAME}' ready on 127.0.0.1:${DASH_DB_PORT}."
 fi
 
 # ---- Prepare Project Directory ----------------------------
@@ -791,7 +828,7 @@ echo "  Dashboard URL    : ${PUBLIC_ORIGIN}"
 echo "  Server Public IP : ${SERVER_IP} (use for custom app DNS A records)"
 echo "  Nginx Status     : $([[ "$NGINX_STARTED" == "true" ]] && echo "Running" || echo "Port 80/443 conflict — see warning above")"
 echo "  Backend Health   : $([[ "$HEALTH_OK" == "true" ]] && echo "OK (port ${APP_PORT})" || echo "Check: pm2 logs paasbydeeep-backend")"
-echo "  Database Mode    : $([[ "$DB_CHOICE" == "1" ]] && echo "Local PostgreSQL (${PG_DB_NAME})" || echo "External / Neon DB")"
+echo "  Database Mode    : $([[ "$DB_CHOICE" == "1" ]] && echo "Docker PostgreSQL (${PG_DB_NAME} @ 127.0.0.1:${DASH_DB_PORT})" || echo "External / Neon DB")"
 echo "  Admin Username   : ${ADMIN_USERNAME}"
 if [[ "$ADMIN_PASS_AUTOGEN" == "true" ]]; then
   echo "  Admin Password   : ${ADMIN_PASSWORD}  (auto-generated — save this!)"

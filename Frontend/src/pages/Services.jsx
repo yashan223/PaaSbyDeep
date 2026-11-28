@@ -27,6 +27,7 @@ function Services() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [creating, setCreating] = useState(false);
+  const [busyId, setBusyId] = useState(null);
 
   const [form, setForm] = useState({
     serviceType: 'postgres',
@@ -119,11 +120,11 @@ function Services() {
         memoryLimitMb: Number(form.memoryLimitMb) || 512,
       });
       setForm((f) => ({ ...f, name: '', port: '' }));
-      setNotice(
-        res.startError
-          ? `Service '${res.service.name}' created, but container failed to start: ${res.startError}`
-          : `Managed service '${res.service.name}' created and running on port ${res.service.port}.`
-      );
+      if (res.startError) {
+        setError(`Service '${res.service.name}' was created, but failed to start: ${res.startError}`);
+      } else {
+        setNotice(`Managed service '${res.service.name}' created and running on port ${res.service.port}.`);
+      }
       await loadAll();
     } catch (err) {
       setError(err?.response?.data?.error || 'Failed to create managed service.');
@@ -135,12 +136,16 @@ function Services() {
   const handleControl = async (id, action) => {
     setError('');
     setNotice('');
+    setBusyId(id);
     try {
       const updated = await controlService(id, action);
       setNotice(`Service '${updated.name}' is now ${updated.status}.`);
       await loadAll();
     } catch (err) {
       setError(err?.response?.data?.error || `Failed to ${action} service.`);
+      await loadAll();
+    } finally {
+      setBusyId(null);
     }
   };
 
@@ -322,17 +327,21 @@ function Services() {
             <p>No managed databases or storage services provisioned yet. Create PostgreSQL, MongoDB, MinIO (S3), Redis, or MySQL above.</p>
           </div>
         ) : (
-          <div className="app-grid">
+          <div className="app-grid app-grid--services">
             {services.map((svc) => {
               const revealed = Boolean(revealedIds[svc.id]);
               const isMinio = svc.service_type === 'minio';
+              const isBusy = busyId === svc.id;
               return (
                 <div key={svc.id} className="app-card">
                   <div className="app-card-header">
                     <div>
                       <span className="app-card-name">{svc.name}</span>
                       <div className="app-card-repo">
-                        {(templates[svc.service_type]?.label || svc.service_type)} v{svc.version} · Host: <code>{svc.container_hostname}</code>
+                        {(templates[svc.service_type]?.label || svc.service_type)} v{svc.version}
+                      </div>
+                      <div className="service-host-line">
+                        Host: <code>{svc.container_hostname}</code>
                       </div>
                     </div>
                     <StatusBadge status={svc.status} />
@@ -345,13 +354,19 @@ function Services() {
                     <span>RAM: <strong>{svc.memory_limit_mb} MB</strong></span>
                   </div>
 
+                  {svc.status === 'error' && (
+                    <div className="alert alert-error service-inline-error">
+                      {svc.last_error || 'Container failed to start. Click Start to retry or Logs to inspect.'}
+                    </div>
+                  )}
+
                   <div className="service-conn-box">
                     <div className="code-block-header">
                       <span className="form-hint">
-                        {isMinio ? 'S3 API External URL' : 'External URL (Compass / pgAdmin / CLI)'}
+                        {isMinio ? 'External S3 Endpoint (HTTP · Raw IP)' : 'External URL (Compass / pgAdmin / CLI)'}
                       </span>
                       <div style={{ display: 'flex', gap: '4px' }}>
-                        {canManage && (
+                        {!isMinio && canManage && (
                           <button
                             type="button"
                             className="btn btn-xs btn-secondary"
@@ -375,6 +390,11 @@ function Services() {
                     <code className="webhook-url">
                       {revealed ? svc.external_url : svc.external_url.replace(/:([^:@]+)@/, ':••••••••@')}
                     </code>
+                    {isMinio && (
+                      <span className="form-hint" style={{ display: 'block', marginTop: '6px' }}>
+                        Raw IP serves HTTP; apps inside Docker should connect via Internal URL below.
+                      </span>
+                    )}
                   </div>
 
                   <div className="service-conn-box">
@@ -399,46 +419,92 @@ function Services() {
                     <div className="service-conn-box">
                       <div className="code-block-header">
                         <span className="form-hint">S3 Credentials &amp; Console</span>
-                        {svc.console_url && (
-                          <a
-                            href={svc.console_url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="app-access-link"
-                          >
-                            Console <ExternalLink size={11} />
-                          </a>
-                        )}
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                          {svc.console_url && (
+                            <a
+                              href={svc.console_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="app-access-link"
+                            >
+                              Console <ExternalLink size={11} />
+                            </a>
+                          )}
+                          {canManage && (
+                            <button
+                              type="button"
+                              className="btn btn-xs btn-secondary"
+                              onClick={() => setRevealedIds((p) => ({ ...p, [svc.id]: !p[svc.id] }))}
+                              title={revealed ? 'Hide secret key' : 'Reveal secret key'}
+                            >
+                              {revealed ? <EyeOff size={11} /> : <Eye size={11} />}
+                            </button>
+                          )}
+                        </div>
                       </div>
                       <div className="minio-cred-grid">
                         <div className="minio-cred-row">
                           <span className="form-hint">Access Key</span>
-                          <code className="minio-cred-val">{svc.access_key || 'paasadmin'}</code>
+                          <div className="minio-cred-val-wrap">
+                            <code className="minio-cred-val">{svc.access_key || 'paasadmin'}</code>
+                            <button
+                              type="button"
+                              className="btn btn-xs btn-secondary"
+                              onClick={() => copyValue(`ak-${svc.id}`, svc.access_key || 'paasadmin')}
+                              disabled={!canManage}
+                              title="Copy Access Key"
+                            >
+                              {copiedKey === `ak-${svc.id}` ? <Check size={10} /> : <Copy size={10} />}
+                            </button>
+                          </div>
                         </div>
                         <div className="minio-cred-row">
                           <span className="form-hint">Secret Key</span>
-                          <code className="minio-cred-val">
-                            {revealed ? (svc.secret_key || '—') : '••••••••'}
-                          </code>
+                          <div className="minio-cred-val-wrap">
+                            <code className="minio-cred-val">
+                              {revealed ? (svc.secret_key || '—') : '••••••••'}
+                            </code>
+                            <button
+                              type="button"
+                              className="btn btn-xs btn-secondary"
+                              onClick={() => copyValue(`sk-${svc.id}`, svc.secret_key)}
+                              disabled={!canManage || !svc.secret_key}
+                              title="Copy Secret Key"
+                            >
+                              {copiedKey === `sk-${svc.id}` ? <Check size={10} /> : <Copy size={10} />}
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>
                   )}
 
-                  <div className="app-card-actions">
+                  <div className="app-card-actions service-card-actions">
                     {canManage && (
                       <>
                         {svc.status !== 'running' ? (
-                          <button className="btn btn-sm btn-primary" onClick={() => handleControl(svc.id, 'start')}>
-                            <Play size={13} /> Start
+                          <button
+                            className="btn btn-sm btn-primary"
+                            disabled={isBusy}
+                            onClick={() => handleControl(svc.id, 'start')}
+                          >
+                            <Play size={13} /> {isBusy ? 'Starting…' : 'Start'}
                           </button>
                         ) : (
-                          <button className="btn btn-sm btn-secondary" onClick={() => handleControl(svc.id, 'restart')}>
-                            <RotateCcw size={13} /> Restart
+                          <button
+                            className="btn btn-sm btn-secondary"
+                            disabled={isBusy}
+                            onClick={() => handleControl(svc.id, 'restart')}
+                          >
+                            <RotateCcw size={13} /> {isBusy ? 'Restarting…' : 'Restart'}
                           </button>
                         )}
                         {svc.status === 'running' && (
-                          <button className="btn btn-sm btn-secondary" onClick={() => handleControl(svc.id, 'stop')}>
+                          <button
+                            className="btn btn-sm btn-secondary"
+                            disabled={isBusy}
+                            onClick={() => handleControl(svc.id, 'stop')}
+                          >
                             <Square size={13} /> Stop
                           </button>
                         )}

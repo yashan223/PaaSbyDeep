@@ -45,6 +45,7 @@ function Dashboard() {
   const [services, setServices] = useState([]);
   const [showCreateDbModal, setShowCreateDbModal] = useState(false);
   const [dbNotice, setDbNotice] = useState('');
+  const [dbError, setDbError] = useState('');
   const [copiedSvcKey, setCopiedSvcKey] = useState('');
   const [actionError, setActionError] = useState('');
   const stats = wsStats || polledStats;
@@ -110,7 +111,7 @@ function Dashboard() {
   };
 
   const handleServiceAction = async (id, action) => {
-    setActionError('');
+    setDbError('');
     setDbNotice('');
     try {
       const updated = await controlService(id, action);
@@ -118,7 +119,8 @@ function Dashboard() {
       const list = await getServices();
       setServices(Array.isArray(list) ? list : []);
     } catch (err) {
-      setActionError(err?.response?.data?.error || `Failed to ${action} database.`);
+      setDbError(err?.response?.data?.error || `Failed to ${action} database.`);
+      getServices().then((list) => setServices(Array.isArray(list) ? list : [])).catch(() => {});
     }
   };
 
@@ -345,6 +347,7 @@ function Dashboard() {
           </div>
         </div>
 
+        {dbError && <div className="alert alert-error" style={{ marginBottom: '12px' }}>{dbError}</div>}
         {dbNotice && <div className="alert alert-success" style={{ marginBottom: '12px' }}>{dbNotice}</div>}
 
         {services.length === 0 ? (
@@ -443,11 +446,13 @@ function Dashboard() {
         isOpen={showCreateDbModal}
         onClose={() => setShowCreateDbModal(false)}
         onCreated={(res) => {
-          setDbNotice(
-            res?.startError
-              ? `Database '${res.service.name}' created, but failed to start: ${res.startError}`
-              : `Database '${res?.service?.name}' (${res?.service?.service_type}) created on port ${res?.service?.port}.`
-          );
+          setDbError('');
+          setDbNotice('');
+          if (res?.startError) {
+            setDbError(`Service '${res.service.name}' created, but failed to start: ${res.startError}`);
+          } else {
+            setDbNotice(`Service '${res?.service?.name}' (${res?.service?.service_type}) created on port ${res?.service?.port}.`);
+          }
           getServices().then((list) => setServices(Array.isArray(list) ? list : [])).catch(() => {});
         }}
       />

@@ -30,7 +30,8 @@ bash <(curl -Ls https://raw.githubusercontent.com/yashan223/PaaSbyDeep/master/in
 
 The installer prompts for your preferences and sets up:
 - Node.js 20, Docker Engine, Nginx, Certbot, and PM2
-- Choice of **local PostgreSQL** (auto-installed & configured) or an **existing Neon DB / external PostgreSQL URL**
+- Choice of **local PostgreSQL in Docker** (`paasbydeeep-db` container, `postgres:16-alpine`) or an **existing Neon DB / external PostgreSQL URL**
+- One-click Dockerized Managed Databases & S3 Object Storage from the dashboard (`postgres:16-alpine`, `mongo:7`, `pgsty/silo:latest` MinIO S3 fork, `redis:7-alpine`, `mysql:8.4`)
 - Admin username & password (persisted directly into the database), generated secrets, schema migration, Frontend production build, Nginx reverse proxy, optional Let's Encrypt SSL, and PM2 systemd startup
 
 To completely uninstall PaaSbyDeep (PM2 service, `paasbydeeep-*` Docker containers/images, Nginx configs, Certbot certs, database/tables, and app files):
@@ -77,8 +78,13 @@ cd PaaSbyDeep
 npm run install:all
 ```
 
-### 3. Configure environment variables
+### 3. Configure environment variables (with local Docker Postgres or Neon DB)
 ```bash
+# Optional: run dashboard PostgreSQL locally in Docker
+docker run -d --name paasbydeeep-db -p 127.0.0.1:5432:5432 \
+  -e POSTGRES_USER=paasbydeeep -e POSTGRES_PASSWORD=changeme -e POSTGRES_DB=paasbydeeep \
+  -v paasbydeeep-db-data:/var/lib/postgresql/data postgres:16-alpine
+
 cp Backend/.env.example Backend/.env
 cp Frontend/.env.example Frontend/.env
 ```

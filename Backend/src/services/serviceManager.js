@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import net from 'node:net';
 import { getDb } from '../db/database.js';
 import { encryptSecret, decryptSecret } from '../utils/crypto.js';
 import { sanitizeName, sanitizePort } from '../utils/sanitize.js';
@@ -40,9 +41,10 @@ export const SERVICE_TEMPLATES = {
     defaultDatabase: 'appdb',
     envKey: 'MONGODB_URI',
   },
+  // Official minio/minio images were removed from Docker Hub; pgsty/silo is a drop-in S3 & Console compatible fork
   minio: {
     label: 'MinIO (S3 Storage)',
-    image: 'minio/minio:latest',
+    image: 'pgsty/silo:latest',
     version: 'latest',
     defaultPort: 9000,
     containerPort: 9000,
@@ -222,6 +224,16 @@ export function serializeService(service, publicHost = 'localhost', role = 'admi
   };
 }
 
+function isHostPortAvailable(port) {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.once('error', () => resolve(false));
+    srv.listen({ port, host: '0.0.0.0', exclusive: true }, () => {
+      srv.close(() => resolve(true));
+    });
+  });
+}
+
 async function allocateServicePort(sql, requestedPort, defaultPort, extraUsedPorts = []) {
   const extraSet = new Set(extraUsedPorts.map(Number));
   if (requestedPort !== undefined && requestedPort !== null && requestedPort !== '') {
@@ -232,6 +244,9 @@ async function allocateServicePort(sql, requestedPort, defaultPort, extraUsedPor
     const appClash = await sql`SELECT id FROM applications WHERE port = ${safe}`;
     if (svcClash.length > 0 || appClash.length > 0) {
       throw new Error(`Port ${safe} is already assigned to another service or application.`);
+    }
+    if (!(await isHostPortAvailable(safe))) {
+      throw new Error(`Host port ${safe} is already in use on this server.`);
     }
     return safe;
   }
@@ -245,7 +260,7 @@ async function allocateServicePort(sql, requestedPort, defaultPort, extraUsedPor
   `;
   const used = new Set([...usedRows.map((r) => Number(r.port)), ...extraSet]);
   let candidate = defaultPort;
-  while (used.has(candidate) && candidate < 65000) {
+  while (candidate < 65000 && (used.has(candidate) || !(await isHostPortAvailable(candidate)))) {
     candidate += 1;
   }
   return candidate;
@@ -306,7 +321,21 @@ async function createAndStartServiceContainer(service, plainPassword) {
 
   const container = await docker.createContainer(createOptions);
   await container.start();
+  await new Promise((resolve) => setTimeout(resolve, 700));
   const info = await container.inspect();
+  if (!info.State?.Running) {
+    let tail = '';
+    try {
+      const buf = await container.logs({ stdout: true, stderr: true, tail: 25, follow: false });
+      tail = demuxDockerLogBuffer(buf, Boolean(info.Config?.Tty)).trim();
+    } catch {
+    }
+    throw new Error(
+      tail
+        ? `Container exited right after start (code ${info.State?.ExitCode}): ${tail.slice(0, 240)}`
+        : `Container exited right after start with code ${info.State?.ExitCode ?? 'unknown'}.`
+    );
+  }
   return info.Id;
 }
 
@@ -321,17 +350,28 @@ export async function listManagedServices(role = 'admin') {
   // Refresh live container status safely in parallel
   const hydrated = await Promise.all(rows.map(async (row) => {
     let status = row.status;
+    let lastError = row.last_error || '';
     try {
       const found = await findServiceContainer(row);
       if (found) {
-        status = found.info.State?.Running ? 'running' : 'stopped';
-        if (status !== row.status) {
-          await sql`UPDATE managed_services SET status = ${status}, updated_at = NOW() WHERE id = ${row.id}`;
+        const isRunning = Boolean(found.info.State?.Running);
+        if (isRunning) {
+          status = 'running';
+          lastError = '';
+        } else {
+          const failedExit = row.status === 'error' && Number(found.info.State?.ExitCode || 0) !== 0;
+          status = failedExit ? 'error' : 'stopped';
+        }
+        if (status !== row.status || lastError !== (row.last_error || '')) {
+          await sql`
+            UPDATE managed_services SET status = ${status}, last_error = ${lastError}, updated_at = NOW()
+            WHERE id = ${row.id}
+          `;
         }
       }
     } catch {
     }
-    return serializeService({ ...row, status }, publicHost, role);
+    return serializeService({ ...row, status, last_error: lastError }, publicHost, role);
   }));
   return hydrated;
 }
@@ -391,15 +431,16 @@ export async function createManagedService({
       const containerId = await createAndStartServiceContainer(record, plainPassword);
       const updated = await sql`
         UPDATE managed_services
-        SET container_id = ${containerId}, status = 'running', updated_at = NOW()
+        SET container_id = ${containerId}, status = 'running', last_error = '', updated_at = NOW()
         WHERE id = ${record.id}
         RETURNING *
       `;
       record = updated[0];
     } catch (err) {
       startError = err.message;
+      const errMsg = String(err.message || 'Container failed to start').slice(0, 600);
       const errRows = await sql`
-        UPDATE managed_services SET status = 'error', updated_at = NOW()
+        UPDATE managed_services SET status = 'error', last_error = ${errMsg}, updated_at = NOW()
         WHERE id = ${record.id}
         RETURNING *
       `;
@@ -421,50 +462,68 @@ export async function controlManagedService(id, action, role = 'admin') {
   const rows = await sql`SELECT * FROM managed_services WHERE id = ${id}`;
   if (!rows[0]) throw new Error('Managed service not found.');
   let service = rows[0];
+  const tpl = SERVICE_TEMPLATES[service.service_type];
   const plainPassword = decryptSecret(service.password) || '';
 
-  if (action === 'start') {
-    const found = await findServiceContainer(service);
-    let containerId = service.container_id;
-    if (found) {
-      if (!found.info.State?.Running) await found.container.start();
-      containerId = found.info.Id;
-    } else {
-      containerId = await createAndStartServiceContainer(service, plainPassword);
-    }
-    const upd = await sql`
-      UPDATE managed_services SET status = 'running', container_id = ${containerId}, updated_at = NOW()
-      WHERE id = ${id} RETURNING *
-    `;
-    service = upd[0];
-  } else if (action === 'stop') {
-    const found = await findServiceContainer(service);
-    if (found && found.info.State?.Running) {
-      await found.container.stop({ t: 10 });
-    }
-    const upd = await sql`
-      UPDATE managed_services SET status = 'stopped', updated_at = NOW()
-      WHERE id = ${id} RETURNING *
-    `;
-    service = upd[0];
-  } else if (action === 'restart') {
-    const found = await findServiceContainer(service);
-    if (found) {
-      await found.container.restart();
-    } else {
-      const containerId = await createAndStartServiceContainer(service, plainPassword);
-      service = (await sql`
-        UPDATE managed_services SET container_id = ${containerId}, updated_at = NOW()
+  try {
+    if (action === 'start') {
+      const found = await findServiceContainer(service);
+      let containerId = service.container_id;
+      const needsRecreate = !found
+        || (!found.info.State?.Running && (service.status === 'error' || (tpl?.image && found.info.Config?.Image !== tpl.image)));
+      if (needsRecreate) {
+        containerId = await createAndStartServiceContainer(service, plainPassword);
+      } else if (!found.info.State?.Running) {
+        await found.container.start();
+        containerId = found.info.Id;
+      } else {
+        containerId = found.info.Id;
+      }
+      const nextVer = tpl?.version || service.version;
+      const upd = await sql`
+        UPDATE managed_services
+        SET status = 'running', version = ${nextVer}, container_id = ${containerId}, last_error = '', updated_at = NOW()
         WHERE id = ${id} RETURNING *
-      `)[0];
+      `;
+      service = upd[0];
+    } else if (action === 'stop') {
+      const found = await findServiceContainer(service);
+      if (found && found.info.State?.Running) {
+        await found.container.stop({ t: 10 });
+      }
+      const upd = await sql`
+        UPDATE managed_services SET status = 'stopped', last_error = '', updated_at = NOW()
+        WHERE id = ${id} RETURNING *
+      `;
+      service = upd[0];
+    } else if (action === 'restart') {
+      const found = await findServiceContainer(service);
+      const needsRecreate = !found || (tpl?.image && found.info.Config?.Image !== tpl.image);
+      if (needsRecreate) {
+        const containerId = await createAndStartServiceContainer(service, plainPassword);
+        service = (await sql`
+          UPDATE managed_services SET container_id = ${containerId}, version = ${tpl?.version || service.version}, updated_at = NOW()
+          WHERE id = ${id} RETURNING *
+        `)[0];
+      } else {
+        await found.container.restart();
+      }
+      const upd = await sql`
+        UPDATE managed_services SET status = 'running', last_error = '', updated_at = NOW()
+        WHERE id = ${id} RETURNING *
+      `;
+      service = upd[0];
+    } else {
+      throw new Error('Invalid service action.');
     }
-    const upd = await sql`
-      UPDATE managed_services SET status = 'running', updated_at = NOW()
-      WHERE id = ${id} RETURNING *
-    `;
-    service = upd[0];
-  } else {
-    throw new Error('Invalid service action.');
+  } catch (err) {
+    const errMsg = String(err.message || `Failed to ${action} service.`).slice(0, 600);
+    await sql`
+      UPDATE managed_services SET status = 'error', last_error = ${errMsg}, updated_at = NOW()
+      WHERE id = ${id}
+    `.catch(() => {});
+    broadcast({ type: 'services:changed', action, serviceId: id });
+    throw err;
   }
 
   const ips = await getServerPublicIps().catch(() => ({ publicIpv4: null, localIpv4: 'localhost' }));
