@@ -16,6 +16,15 @@ export const restartApp = (id) => client.post(`/deploy/${id}/restart`).then((r) 
 
 export const stopApp = (id) => client.post(`/deploy/${id}/stop`).then((r) => r.data);
 
+export const rollbackApp = (id, deploymentId) =>
+  client.post(`/deploy/${id}/rollback`, { deploymentId }).then((r) => r.data);
+
+export const getContainerStats = (id) =>
+  client.get(`/deploy/${id}/container-stats`).then((r) => r.data);
+
+export const getAppsStatsSummary = () =>
+  client.get('/apps/stats/summary').then((r) => r.data);
+
 export const getAppLogs = (id, deploymentId) =>
   client.get(`/deploy/${id}/logs`, deploymentId ? { params: { deploymentId } } : undefined).then((r) => r.data);
 

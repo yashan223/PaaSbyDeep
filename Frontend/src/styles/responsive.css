@@ -208,6 +208,18 @@
   .app-detail-header-left {
     width: 100%;
   }
+
+  .env-row {
+    flex-wrap: wrap;
+  }
+
+  .env-key-input {
+    flex: 1 1 100%;
+  }
+
+  .terminal-input-row {
+    flex-wrap: wrap;
+  }
 }
 
 @media (max-width: 540px) {

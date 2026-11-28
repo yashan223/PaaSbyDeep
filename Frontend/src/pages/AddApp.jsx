@@ -2,8 +2,11 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { Github, Search, Lock, Globe, ChevronDown, X, Check } from 'lucide-react';
 import { createApp } from '../api/apps';
+import { getServices } from '../api/services';
 import { getGithubStatus, getGithubRepos, getRepoBranches, detectGithubProject } from '../api/github';
 import RepoVisibilityFilter from '../components/RepoVisibilityFilter';
+import EnvVarsEditor from '../components/EnvVarsEditor';
+import VolumesEditor from '../components/VolumesEditor';
 import { filterRepos } from '../utils/repoFilter';
 
 const DEFAULT_FORM = {
@@ -12,7 +15,11 @@ const DEFAULT_FORM = {
   branch: 'main',
   dockerfilePath: 'Dockerfile',
   port: '',
-  envVars: '',
+  memoryLimitMb: '',
+  cpuLimit: '',
+  healthCheckPath: '',
+  envVars: {},
+  volumes: [],
 };
 
 function sanitizeAppName(raw) {
@@ -22,19 +29,6 @@ function sanitizeAppName(raw) {
     .replace(/-+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 50);
-}
-
-function envTextToObj(text) {
-  const obj = {};
-  text.split('\n').forEach((line) => {
-    const eq = line.indexOf('=');
-    if (eq > 0) {
-      const key = line.slice(0, eq).trim();
-      const val = line.slice(eq + 1).trim();
-      if (key) obj[key] = val;
-    }
-  });
-  return obj;
 }
 
 function AddApp() {
@@ -51,6 +45,7 @@ function AddApp() {
         }
       : {}),
   }));
+  const [services, setServices] = useState([]);
   const [ghConnected, setGhConnected] = useState(false);
   const [ghUsername, setGhUsername] = useState('');
   const [repos, setRepos] = useState([]);
@@ -89,6 +84,10 @@ function AddApp() {
   }, []);
 
   useEffect(() => {
+    getServices()
+      .then((list) => setServices(Array.isArray(list) ? list : []))
+      .catch(() => {});
+
     getGithubStatus()
       .then((status) => {
         if (status.connected) {
@@ -208,7 +207,11 @@ function AddApp() {
         branch: form.branch.trim() || 'main',
         dockerfile_path: form.dockerfilePath.trim() || 'Dockerfile',
         port: Number(form.port),
-        env_vars: form.envVars.trim() ? envTextToObj(form.envVars) : {},
+        env_vars: form.envVars || {},
+        volumes: (form.volumes || []).filter((v) => v.name?.trim() && v.containerPath?.trim()),
+        memory_limit_mb: form.memoryLimitMb ? Number(form.memoryLimitMb) : null,
+        cpu_limit: form.cpuLimit ? Number(form.cpuLimit) : null,
+        health_check_path: form.healthCheckPath.trim(),
         project_type: detected?.projectType || 'auto',
       };
       const result = await createApp(payload);
@@ -502,16 +505,62 @@ function AddApp() {
             </div>
           </div>
 
+          <div className="form-row">
+            <div className="form-group">
+              <label className="form-label" htmlFor="memoryLimitMb">Memory Limit (MB) <span className="form-optional">(optional)</span></label>
+              <input
+                id="memoryLimitMb"
+                type="number"
+                className="form-input"
+                value={form.memoryLimitMb}
+                onChange={set('memoryLimitMb')}
+                min="128"
+                max="16384"
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label" htmlFor="cpuLimit">CPU Limit (Cores) <span className="form-optional">(optional)</span></label>
+              <input
+                id="cpuLimit"
+                type="number"
+                step="0.1"
+                className="form-input"
+                value={form.cpuLimit}
+                onChange={set('cpuLimit')}
+                min="0.1"
+                max="16"
+              />
+            </div>
+          </div>
+
           <div className="form-group">
-            <label className="form-label" htmlFor="envVars">Environment Variables</label>
-            <textarea
-              id="envVars"
-              className="form-textarea"
-              value={form.envVars}
-              onChange={set('envVars')}
-              rows={6}
+            <label className="form-label" htmlFor="healthCheckPath">HTTP Health Check Path <span className="form-optional">(optional)</span></label>
+            <input
+              id="healthCheckPath"
+              type="text"
+              className="form-input"
+              value={form.healthCheckPath}
+              onChange={set('healthCheckPath')}
             />
-            <span className="form-hint">One KEY=VALUE per line</span>
+            <span className="form-hint">Polled after deploy and periodically while running. Must start with /.</span>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Persistent Volumes <span className="form-optional">(optional)</span></label>
+            <VolumesEditor
+              volumes={form.volumes}
+              onChange={(volumes) => setForm((f) => ({ ...f, volumes }))}
+            />
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Environment Variables</label>
+            <EnvVarsEditor
+              value={form.envVars}
+              services={services}
+              onChange={(envVars) => setForm((f) => ({ ...f, envVars }))}
+            />
           </div>
 
           <div className="form-actions">

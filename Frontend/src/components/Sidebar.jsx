@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Box, Globe, Terminal, Github, Users, Settings, LogOut, X } from 'lucide-react';
+import { LayoutDashboard, Box, Globe, Database, Terminal, Github, Users, ClipboardList, Settings, LogOut, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useState, useEffect } from 'react';
 import { getGithubStatus } from '../api/github';
@@ -96,6 +96,14 @@ function Sidebar({ isOpen = false, onClose }) {
             <span>Domains &amp; SSL</span>
           </NavLink>
           <NavLink
+            to="/services"
+            onClick={handleNavClick}
+            className={({ isActive }) => `sidebar-link${isActive ? ' sidebar-link--active' : ''}`}
+          >
+            <Database size={16} />
+            <span>Services</span>
+          </NavLink>
+          <NavLink
             to="/logs"
             onClick={handleNavClick}
             className={({ isActive }) => `sidebar-link${isActive ? ' sidebar-link--active' : ''}`}
@@ -113,14 +121,24 @@ function Sidebar({ isOpen = false, onClose }) {
             {ghConnected && <span className="sidebar-dot-connected" title="Connected" />}
           </NavLink>
           {(user?.role || 'admin') === 'admin' && (
-            <NavLink
-              to="/users"
-              onClick={handleNavClick}
-              className={({ isActive }) => `sidebar-link${isActive ? ' sidebar-link--active' : ''}`}
-            >
-              <Users size={16} />
-              <span>Users</span>
-            </NavLink>
+            <>
+              <NavLink
+                to="/users"
+                onClick={handleNavClick}
+                className={({ isActive }) => `sidebar-link${isActive ? ' sidebar-link--active' : ''}`}
+              >
+                <Users size={16} />
+                <span>Users</span>
+              </NavLink>
+              <NavLink
+                to="/audit"
+                onClick={handleNavClick}
+                className={({ isActive }) => `sidebar-link${isActive ? ' sidebar-link--active' : ''}`}
+              >
+                <ClipboardList size={16} />
+                <span>Audit Logs</span>
+              </NavLink>
+            </>
           )}
           <NavLink
             to="/settings"

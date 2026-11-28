@@ -14,3 +14,15 @@ export const installDashboardSsl = (data) =>
 
 export const pruneDockerImages = () =>
   client.post('/settings/docker/prune').then((r) => r.data);
+
+export const getDockerDiskUsage = () =>
+  client.get('/settings/docker/df').then((r) => r.data);
+
+export const testNotificationWebhook = (webhookUrl) =>
+  client.post('/settings/notifications/test', { webhookUrl }).then((r) => r.data);
+
+export const exportPlatformBackup = () =>
+  client.get('/settings/backup').then((r) => r.data);
+
+export const restorePlatformBackup = (manifest) =>
+  client.post('/settings/backup/restore', manifest).then((r) => r.data);

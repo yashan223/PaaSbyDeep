@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { getDb } from '../db/database.js';
 import { authenticate } from '../middleware/auth.js';
+import { recordAudit } from '../services/auditService.js';
 
 const router = Router();
 
@@ -40,6 +41,15 @@ router.post('/login', async (req, res) => {
       process.env.JWT_SECRET,
       { algorithm: 'HS256', expiresIn: '1d' }
     );
+
+    void recordAudit({
+      req,
+      user: { id: user.id, username: user.username, role },
+      action: 'auth.login',
+      targetType: 'user',
+      targetId: user.id,
+      targetName: user.username,
+    });
 
     return res.json({
       token,

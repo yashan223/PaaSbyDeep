@@ -3,21 +3,42 @@ import { Plus, Play, RotateCcw, Square, Pencil, Server, Globe, ExternalLink } fr
 import StatusBadge from '../components/StatusBadge';
 import useApps from '../hooks/useApps';
 import { useWebSocket } from '../context/WebSocketContext';
-import { deployApp, restartApp, stopApp } from '../api/apps';
+import { deployApp, restartApp, stopApp, getAppsStatsSummary } from '../api/apps';
 import { getDomainSystemStatus } from '../api/domains';
 import { getPrimaryAppAccess } from '../utils/appUrl';
+import { formatBytes } from '../utils/format';
 import { useState, useEffect } from 'react';
 
 function AppList() {
   const { apps, setApps, loading, error, fetchApps } = useApps();
   const { subscribe } = useWebSocket();
   const [sysStatus, setSysStatus] = useState(null);
+  const [statsMap, setStatsMap] = useState({});
   const [actionError, setActionError] = useState('');
 
   useEffect(() => {
     void fetchApps();
     getDomainSystemStatus().then(setSysStatus).catch(() => {});
   }, [fetchApps]);
+
+  const hasRunning = apps.some((a) => a.status === 'running');
+  useEffect(() => {
+    if (!hasRunning) return undefined;
+    let active = true;
+    const loadStats = () => {
+      getAppsStatsSummary()
+        .then((map) => {
+          if (active && map && typeof map === 'object') setStatsMap(map);
+        })
+        .catch(() => {});
+    };
+    loadStats();
+    const timer = setInterval(loadStats, 5000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [hasRunning]);
 
   useEffect(() => {
     return subscribe((msg) => {
@@ -89,6 +110,16 @@ function AppList() {
                   <span>Port: <strong>{app.port || '—'}</strong></span>
                   {app.project_type && app.project_type !== 'auto' && (
                     <span className="project-type-pill">{app.project_type}</span>
+                  )}
+                  {app.health_check_path && app.health_status && app.health_status !== 'unknown' && (
+                    <span className={`status-badge status-badge--${app.health_status === 'healthy' ? 'running' : 'failed'}`}>
+                      {app.health_status}
+                    </span>
+                  )}
+                  {statsMap[id]?.running && (
+                    <span>
+                      CPU: <strong>{statsMap[id].cpuPercent}%</strong> · RAM: <strong>{formatBytes(statsMap[id].memoryUsedBytes)}</strong>
+                    </span>
                   )}
                 </div>
 

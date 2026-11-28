@@ -1,6 +1,12 @@
 import { getDb } from '../db/database.js';
 import { sanitizeDomain, sanitizeEmail } from '../utils/sanitize.js';
 
+const DEFAULT_NOTIFICATION_EVENTS = {
+  deploy_success: true,
+  deploy_failed: true,
+  app_unhealthy: true,
+};
+
 const DEFAULT_SETTINGS = {
   id: 1,
   platform_name: 'PaaSbyDeep',
@@ -11,7 +17,34 @@ const DEFAULT_SETTINGS = {
   certbot_email: '',
   default_memory_mb: 512,
   max_deployments_retain: 20,
+  notification_webhook_url: '',
+  notification_events: DEFAULT_NOTIFICATION_EVENTS,
 };
+
+function sanitizeNotificationWebhookUrl(raw) {
+  if (!raw || typeof raw !== 'string') return '';
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error('Notification webhook URL must use http:// or https://.');
+    }
+    return parsed.toString();
+  } catch {
+    throw new Error('Invalid notification webhook URL.');
+  }
+}
+
+function normalizeNotificationEvents(raw, fallback = DEFAULT_NOTIFICATION_EVENTS) {
+  const base = { ...DEFAULT_NOTIFICATION_EVENTS, ...(fallback || {}) };
+  if (!raw || typeof raw !== 'object') return base;
+  return {
+    deploy_success: raw.deploy_success !== undefined ? Boolean(raw.deploy_success) : base.deploy_success,
+    deploy_failed: raw.deploy_failed !== undefined ? Boolean(raw.deploy_failed) : base.deploy_failed,
+    app_unhealthy: raw.app_unhealthy !== undefined ? Boolean(raw.app_unhealthy) : base.app_unhealthy,
+  };
+}
 
 function sanitizePublicUrl(raw) {
   if (!raw || typeof raw !== 'string') return '';
@@ -35,7 +68,12 @@ export async function getPlatformSettings() {
   const sql = getDb();
   await sql`INSERT INTO platform_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`;
   const rows = await sql`SELECT * FROM platform_settings WHERE id = 1`;
-  return { ...DEFAULT_SETTINGS, ...(rows[0] || {}) };
+  const row = rows[0] || {};
+  return {
+    ...DEFAULT_SETTINGS,
+    ...row,
+    notification_events: normalizeNotificationEvents(row.notification_events, DEFAULT_NOTIFICATION_EVENTS),
+  };
 }
 
 /**
@@ -98,6 +136,18 @@ export async function updatePlatformSettings(input = {}) {
     maxDeploymentsRetain = retain;
   }
 
+  let notificationWebhookUrl = current.notification_webhook_url || '';
+  if (input.notification_webhook_url !== undefined || input.notificationWebhookUrl !== undefined) {
+    notificationWebhookUrl = sanitizeNotificationWebhookUrl(
+      input.notification_webhook_url ?? input.notificationWebhookUrl
+    );
+  }
+
+  const notificationEvents = normalizeNotificationEvents(
+    input.notification_events ?? input.notificationEvents,
+    current.notification_events
+  );
+
   const sql = getDb();
   await sql`INSERT INTO platform_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`;
   const rows = await sql`
@@ -108,6 +158,8 @@ export async function updatePlatformSettings(input = {}) {
         certbot_email = ${certbotEmail},
         default_memory_mb = ${defaultMemoryMb},
         max_deployments_retain = ${maxDeploymentsRetain},
+        notification_webhook_url = ${notificationWebhookUrl},
+        notification_events = ${JSON.stringify(notificationEvents)}::jsonb,
         updated_at = NOW()
     WHERE id = 1
     RETURNING *

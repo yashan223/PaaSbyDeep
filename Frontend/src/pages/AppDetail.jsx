@@ -3,6 +3,7 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   Play, RotateCcw, Square, Pencil, Trash2, ArrowLeft, GitBranch, Globe, Clock, Github,
   ShieldCheck, RefreshCw, FileCode2, Plus, ExternalLink, Terminal, Search, X, Copy, Check,
+  Activity, HardDrive, HeartPulse,
 } from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
 import LogViewer from '../components/LogViewer';
@@ -11,20 +12,25 @@ import InstallSslModal from '../components/InstallSslModal';
 import NginxConfigModal from '../components/NginxConfigModal';
 import SslStatusBadge from '../components/SslStatusBadge';
 import DnsRecordHint from '../components/DnsRecordHint';
+import ContainerTerminal from '../components/ContainerTerminal';
+import { useAuth } from '../context/AuthContext';
 import { useWebSocket } from '../context/WebSocketContext';
 import {
-  getApp, deployApp, restartApp, stopApp,
-  deleteApp, getAppLogs, getContainerLogs, getDeployments,
+  getApp, deployApp, restartApp, stopApp, rollbackApp,
+  deleteApp, getAppLogs, getContainerLogs, getContainerStats, getDeployments,
 } from '../api/apps';
 import { getGithubStatus, createGithubWebhook } from '../api/github';
 import {
   getAppDomains, getDomainSystemStatus, createDomain, syncNginxConfig, deleteDomain,
 } from '../api/domains';
 import { buildIpAccessUrl, getPrimaryAppAccess } from '../utils/appUrl';
+import { formatBytes, formatDurationSince } from '../utils/format';
 
 function AppDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const canManage = user?.role === 'admin' || user?.role === 'operator';
 
   const [app, setApp] = useState(null);
   const [logs, setLogs] = useState('');
@@ -32,6 +38,7 @@ function AppDetail() {
   const [selectedDeploymentId, setSelectedDeploymentId] = useState('');
   const [activeBuildDeploymentId, setActiveBuildDeploymentId] = useState(null);
   const [runtimeInfo, setRuntimeInfo] = useState({ available: false, running: false, logs: '', reason: '' });
+  const [runtimeStats, setRuntimeStats] = useState(null);
   const [runtimeLoading, setRuntimeLoading] = useState(false);
   const [autoRefreshRuntime, setAutoRefreshRuntime] = useState(true);
   const [logSearch, setLogSearch] = useState('');
@@ -44,6 +51,7 @@ function AppDetail() {
   const [actionError, setActionError] = useState('');
   const [actionLoading, setActionLoading] = useState('');
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [rollbackTarget, setRollbackTarget] = useState(null);
   const [ghConnected, setGhConnected] = useState(false);
   const [webhookMsg, setWebhookMsg] = useState('');
   const [webhookBusy, setWebhookBusy] = useState(false);
@@ -195,13 +203,17 @@ function AppDetail() {
             ? {
                 ...prev,
                 status: msg.status,
+                ...(msg.healthStatus ? { health_status: msg.healthStatus } : {}),
                 ...(msg.lastDeployedAt ? { last_deployed_at: msg.lastDeployedAt } : {}),
               }
             : prev
         );
         if (msg.status === 'running') {
           void fetchRuntimeLogs();
+          getContainerStats(id).then(setRuntimeStats).catch(() => {});
         }
+      } else if (msg.type === 'app:health') {
+        setApp((prev) => (prev ? { ...prev, health_status: msg.healthStatus, last_health_check: msg.checkedAt } : prev));
       } else if (msg.type === 'deploy:log' && msg.chunk) {
         if (!selectedDeploymentId || Number(selectedDeploymentId) === Number(msg.deploymentId)) {
           setLogs((prev) => (typeof prev === 'string' ? prev + msg.chunk : msg.chunk));
@@ -229,6 +241,26 @@ function AppDetail() {
     }, 3000);
     return () => clearInterval(timer);
   }, [logMode, autoRefreshRuntime, app?.status, fetchRuntimeLogs]);
+
+  useEffect(() => {
+    if (app?.status !== 'running') {
+      return undefined;
+    }
+    let active = true;
+    const pollStats = () => {
+      getContainerStats(id)
+        .then((s) => {
+          if (active && s) setRuntimeStats(s);
+        })
+        .catch(() => {});
+    };
+    pollStats();
+    const timer = setInterval(pollStats, 4000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [id, app?.status]);
 
   const rawActiveLogText = useMemo(() => {
     if (logMode === 'runtime') {
@@ -266,6 +298,23 @@ function AppDetail() {
       navigate('/apps');
     } catch (err) {
       setActionError(err?.response?.data?.error || err?.response?.data?.message || 'Delete failed.');
+    }
+  };
+
+  const handleRollback = async () => {
+    if (!rollbackTarget) return;
+    const targetDepId = rollbackTarget.id || rollbackTarget._id;
+    setRollbackTarget(null);
+    setActionError('');
+    setActionLoading('Rollback');
+    try {
+      await rollbackApp(id, targetDepId);
+      setLogMode('build');
+      await fetchAll();
+    } catch (err) {
+      setActionError(err?.response?.data?.error || 'Rollback failed.');
+    } finally {
+      setActionLoading('');
     }
   };
 
@@ -406,6 +455,41 @@ function AppDetail() {
 
       {actionError && <div className="alert alert-error" style={{ marginBottom: '12px' }}>{actionError}</div>}
 
+      {app.status === 'running' && runtimeStats?.running && (
+        <div className="resource-cards" style={{ marginBottom: '18px' }}>
+          <div className="resource-card">
+            <div className="resource-header">
+              <span className="resource-label"><Activity size={13} style={{ verticalAlign: '-2px', marginRight: '5px' }} />Container CPU</span>
+              <span className="resource-value">{runtimeStats.cpuPercent}%</span>
+            </div>
+            <div className="resource-bar">
+              <div className="resource-fill" style={{ width: `${Math.min(runtimeStats.cpuPercent, 100)}%` }} />
+            </div>
+          </div>
+
+          <div className="resource-card">
+            <div className="resource-header">
+              <span className="resource-label">Container RAM</span>
+              <span className="resource-detail">{formatBytes(runtimeStats.memoryUsedBytes)} / {formatBytes(runtimeStats.memoryLimitBytes)}</span>
+              <span className="resource-value">{runtimeStats.memoryPercent}%</span>
+            </div>
+            <div className="resource-bar">
+              <div className="resource-fill resource-fill--ram" style={{ width: `${Math.min(runtimeStats.memoryPercent, 100)}%` }} />
+            </div>
+          </div>
+
+          <div className="resource-card">
+            <div className="resource-header">
+              <span className="resource-label">Network I/O</span>
+              <span className="resource-detail">RX {formatBytes(runtimeStats.netRxBytes)} · TX {formatBytes(runtimeStats.netTxBytes)}</span>
+            </div>
+            <div className="form-hint">
+              Uptime: <strong>{formatDurationSince(runtimeStats.startedAt)}</strong> · PIDs: <strong>{runtimeStats.pids}</strong> · Restarts: <strong>{runtimeStats.restartCount}</strong>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="detail-grid">
         <div className="detail-card">
           <h3 className="detail-card-title">Configuration</h3>
@@ -445,6 +529,36 @@ function AppDetail() {
               <div className="detail-row">
                 <span className="detail-key">Project Type</span>
                 <span className="detail-val"><span className="project-type-pill">{app.project_type}</span></span>
+              </div>
+            )}
+            {(app.memory_limit_mb || app.cpu_limit) && (
+              <div className="detail-row">
+                <span className="detail-key">Resource Limits</span>
+                <span className="detail-val">
+                  {app.memory_limit_mb ? `${app.memory_limit_mb} MB RAM` : 'Default RAM'}
+                  {app.cpu_limit ? ` · ${app.cpu_limit} CPU` : ''}
+                </span>
+              </div>
+            )}
+            {app.health_check_path && (
+              <div className="detail-row">
+                <span className="detail-key"><HeartPulse size={13} /> Health Check</span>
+                <span className="detail-val">
+                  <code>{app.health_check_path}</code>{' '}
+                  {app.health_status && app.health_status !== 'unknown' && (
+                    <span className={`status-badge status-badge--${app.health_status === 'healthy' ? 'running' : 'failed'}`}>
+                      {app.health_status}
+                    </span>
+                  )}
+                </span>
+              </div>
+            )}
+            {Array.isArray(app.volumes) && app.volumes.length > 0 && (
+              <div className="detail-row">
+                <span className="detail-key"><HardDrive size={13} /> Volumes</span>
+                <span className="detail-val">
+                  {app.volumes.map((v) => `${v.name} → ${v.containerPath}`).join(', ')}
+                </span>
               </div>
             )}
             {(app.last_deployed_at || app.lastDeployedAt) && (
@@ -624,7 +738,7 @@ function AppDetail() {
                   <th>Status</th>
                   <th>Duration</th>
                   <th>Started</th>
-                  <th>Logs</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -636,27 +750,44 @@ function AppDetail() {
                     ? Math.max(0, Math.round((new Date(finishedAt) - new Date(startedAt)) / 1000))
                     : null);
                   const isViewingDep = logMode === 'build' && Number(selectedDeploymentId || activeBuildDeploymentId) === Number(depId);
+                  const canRollbackRow = canManage && d.status === 'success' && Boolean(d.image_tag);
                   return (
                     <tr key={depId || i}>
                       <td><code style={{ fontSize: '12px' }}>#{depId}</code></td>
                       <td><code style={{ fontSize: '12px' }}>{(d.commit_sha || d.commitSha || d.commit || '—').slice(0, 8)}</code></td>
-                      <td>{d.triggered_by || d.triggeredBy || d.trigger || '—'}</td>
+                      <td>
+                        {d.triggered_by || d.triggeredBy || d.trigger || '—'}
+                        {d.rollback_from_id && <span className="form-hint" style={{ marginLeft: '5px' }}>(from #{d.rollback_from_id})</span>}
+                      </td>
                       <td><StatusBadge status={d.status} /></td>
                       <td>{durationSec !== null ? `${durationSec}s` : '—'}</td>
                       <td>{startedAt ? new Date(startedAt).toLocaleString() : '—'}</td>
                       <td>
-                        <button
-                          type="button"
-                          className={`btn btn-xs ${isViewingDep ? 'btn-primary' : 'btn-secondary'}`}
-                          onClick={() => {
-                            setLogMode('build');
-                            setSelectedDeploymentId(String(depId));
-                            void fetchBuildLogs(depId);
-                            logsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                          }}
-                        >
-                          <Terminal size={11} /> View Logs
-                        </button>
+                        <div className="action-btns">
+                          <button
+                            type="button"
+                            className={`btn btn-xs ${isViewingDep ? 'btn-primary' : 'btn-secondary'}`}
+                            onClick={() => {
+                              setLogMode('build');
+                              setSelectedDeploymentId(String(depId));
+                              void fetchBuildLogs(depId);
+                              logsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                            }}
+                          >
+                            <Terminal size={11} /> View Logs
+                          </button>
+                          {canRollbackRow && (
+                            <button
+                              type="button"
+                              className="btn btn-xs btn-secondary"
+                              onClick={() => setRollbackTarget(d)}
+                              disabled={!!actionLoading}
+                              title={`Roll back to deployment #${depId}`}
+                            >
+                              <RotateCcw size={11} /> Rollback
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -693,6 +824,13 @@ function AppDetail() {
                 }}
               >
                 Build &amp; Deploy
+              </button>
+              <button
+                type="button"
+                className={`repo-filter-pill ${logMode === 'terminal' ? 'repo-filter-pill--active' : ''}`}
+                onClick={() => setLogMode('terminal')}
+              >
+                Terminal (Exec)
               </button>
             </div>
             {logMode === 'runtime' && (
@@ -789,15 +927,33 @@ function AppDetail() {
           </div>
         </div>
 
-        <LogViewer
-          logs={filteredLogText}
-          emptyMessage={
-            logMode === 'runtime'
-              ? (runtimeInfo?.reason || 'No container stdout/stderr output recorded yet.')
-              : 'No build/deployment logs recorded for this deployment yet.'
-          }
-        />
+        {logMode === 'terminal' ? (
+          <ContainerTerminal
+            appId={id}
+            appName={app.name}
+            running={app.status === 'running'}
+            canExec={canManage}
+          />
+        ) : (
+          <LogViewer
+            logs={filteredLogText}
+            emptyMessage={
+              logMode === 'runtime'
+                ? (runtimeInfo?.reason || 'No container stdout/stderr output recorded yet.')
+                : 'No build/deployment logs recorded for this deployment yet.'
+            }
+          />
+        )}
       </div>
+
+      <ConfirmModal
+        isOpen={Boolean(rollbackTarget)}
+        title="Confirm Rollback"
+        message={`Roll back "${app.name}" to deployment #${rollbackTarget?.id || rollbackTarget?._id}? The current container will be replaced with image ${rollbackTarget?.image_tag}.`}
+        confirmLabel="Roll Back Now"
+        onConfirm={handleRollback}
+        onCancel={() => setRollbackTarget(null)}
+      />
 
       <ConfirmModal
         isOpen={showDeleteModal}

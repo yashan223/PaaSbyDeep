@@ -4,6 +4,7 @@ import { authenticate, requireRole } from '../middleware/auth.js';
 import { broadcast } from '../services/ws.js';
 import { sanitizeDomain, sanitizeEmail } from '../utils/sanitize.js';
 import { getPlatformSettings } from '../services/settingsService.js';
+import { recordAudit } from '../services/auditService.js';
 import {
   checkDomainDns,
   generateNginxConfig,
@@ -144,6 +145,14 @@ router.post('/', requireRole('admin', 'operator'), async (req, res) => {
     };
 
     broadcast({ type: 'domains:changed', action: 'created', appId: app.id, domain: safeDomain });
+    void recordAudit({
+      req,
+      action: 'domain.create',
+      targetType: 'domain',
+      targetId: inserted[0].id,
+      targetName: safeDomain,
+      details: { appName: app.name },
+    });
     return res.status(201).json(record);
   } catch (err) {
     if (err.code === '23505' || err.message?.includes('unique') || err.message?.includes('duplicate')) {
@@ -296,6 +305,13 @@ router.post('/:id/ssl', requireRole('admin', 'operator'), async (req, res) => {
 
       broadcast({ type: 'domains:changed', action: 'ssl-active', appId: row.app_id, domain: row.domain });
       console.log(`[SSL] Certbot installed certificate for ${row.domain}`);
+      void recordAudit({
+        req,
+        action: 'domain.ssl_install',
+        targetType: 'domain',
+        targetId: domainId,
+        targetName: row.domain,
+      });
 
       return res.json({
         message: `SSL certificate installed for ${row.domain}.`,
@@ -365,6 +381,13 @@ router.delete('/:id', requireRole('admin', 'operator'), async (req, res) => {
     await sql`DELETE FROM domains WHERE id = ${domainId}`;
 
     broadcast({ type: 'domains:changed', action: 'deleted', appId: row.app_id, domain: row.domain });
+    void recordAudit({
+      req,
+      action: 'domain.delete',
+      targetType: 'domain',
+      targetId: row.id,
+      targetName: row.domain,
+    });
     return res.json({ message: `Domain '${row.domain}' removed.` });
   } catch (err) {
     console.error('[Domains] Delete error:', err.message);

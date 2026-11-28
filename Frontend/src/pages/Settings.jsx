@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import {
   Settings as SettingsIcon, KeyRound, ShieldCheck, HardDrive, FileCode2, Check, Copy, Trash2,
+  Bell, Send, Download, Upload, RefreshCw,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { formatBytes } from '../utils/format';
 import {
   getSettings,
   updateSettings,
@@ -10,7 +12,12 @@ import {
   getDashboardNginxConfig,
   installDashboardSsl,
   pruneDockerImages,
+  getDockerDiskUsage,
+  testNotificationWebhook,
+  exportPlatformBackup,
+  restorePlatformBackup,
 } from '../api/settings';
+import { renewAllSsl } from '../api/domains';
 
 function formatUptime(seconds) {
   if (!Number.isFinite(seconds)) return '—';
@@ -50,6 +57,14 @@ function Settings() {
     newPassword: '',
     confirmPassword: '',
   });
+  const [notifForm, setNotifForm] = useState({
+    webhookUrl: '',
+    deploySuccess: true,
+    deployFailed: true,
+    appUnhealthy: true,
+  });
+  const [dockerDf, setDockerDf] = useState(null);
+  const backupFileRef = useRef(null);
 
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -61,6 +76,7 @@ function Settings() {
       .then((res) => {
         if (!active) return;
         const s = res.settings || {};
+        const ev = s.notification_events || {};
         setRuntime(res.runtime || null);
         setGeneralForm({
           platformName: s.platform_name || 'PaaSbyDeep',
@@ -68,6 +84,12 @@ function Settings() {
           certbotEmail: s.certbot_email || '',
           defaultMemoryMb: String(s.default_memory_mb || 512),
           maxDeploymentsRetain: String(s.max_deployments_retain || 20),
+        });
+        setNotifForm({
+          webhookUrl: s.notification_webhook_url || '',
+          deploySuccess: ev.deploy_success !== false,
+          deployFailed: ev.deploy_failed !== false,
+          appUnhealthy: ev.app_unhealthy !== false,
         });
         setDashboardDomain(s.dashboard_domain || '');
         setDashboardSslEnabled(Boolean(s.dashboard_ssl_enabled));
@@ -80,8 +102,16 @@ function Settings() {
       .finally(() => {
         if (active) setLoading(false);
       });
+
+    if (isAdmin) {
+      getDockerDiskUsage()
+        .then((df) => {
+          if (active) setDockerDf(df);
+        })
+        .catch(() => {});
+    }
     return () => { active = false; };
-  }, []);
+  }, [isAdmin]);
 
   const handleSaveGeneral = async (e) => {
     e.preventDefault();
@@ -190,8 +220,98 @@ function Settings() {
     try {
       const res = await pruneDockerImages();
       setNotice(res.message || 'Unused Docker images pruned.');
+      getDockerDiskUsage().then(setDockerDf).catch(() => {});
     } catch (err) {
       setError(err?.response?.data?.error || 'Failed to prune Docker images.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const handleSaveNotifications = async (e) => {
+    e.preventDefault();
+    setBusy('notif');
+    setError('');
+    setNotice('');
+    try {
+      await updateSettings({
+        notification_webhook_url: notifForm.webhookUrl.trim(),
+        notification_events: {
+          deploy_success: notifForm.deploySuccess,
+          deploy_failed: notifForm.deployFailed,
+          app_unhealthy: notifForm.appUnhealthy,
+        },
+      });
+      setNotice('Notification settings saved.');
+    } catch (err) {
+      setError(err?.response?.data?.error || 'Failed to save notification settings.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const handleTestNotification = async () => {
+    setBusy('notif-test');
+    setError('');
+    setNotice('');
+    try {
+      const res = await testNotificationWebhook(notifForm.webhookUrl.trim());
+      setNotice(res.message || 'Test alert sent.');
+    } catch (err) {
+      setError(err?.response?.data?.error || 'Failed to send test alert.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const handleExportBackup = async () => {
+    setBusy('backup');
+    setError('');
+    try {
+      const data = await exportPlatformBackup();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `paasbydeeep-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setNotice('Platform backup JSON downloaded.');
+    } catch (err) {
+      setError(err?.response?.data?.error || 'Failed to export platform backup.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const handleImportBackupFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setBusy('restore');
+    setError('');
+    setNotice('');
+    try {
+      const text = await file.text();
+      const manifest = JSON.parse(text);
+      const res = await restorePlatformBackup(manifest);
+      setNotice(res.message || 'Backup restored.');
+    } catch (err) {
+      setError(err?.response?.data?.error || err?.message || 'Failed to import backup JSON.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const handleRenewAllSsl = async () => {
+    setBusy('renew-ssl');
+    setError('');
+    setNotice('');
+    try {
+      const res = await renewAllSsl();
+      setNotice(res.message || 'SSL renewal check complete.');
+    } catch (err) {
+      setError(err?.response?.data?.error || 'SSL renewal failed.');
     } finally {
       setBusy('');
     }
@@ -484,20 +604,120 @@ function Settings() {
                 <span className="detail-key">CORS Origin</span>
                 <span className="detail-val">{runtime.frontendUrl}</span>
               </div>
+              {dockerDf?.available && (
+                <div className="detail-row">
+                  <span className="detail-key">Docker Storage</span>
+                  <span className="detail-val">
+                    Images {formatBytes(dockerDf.imagesBytes)} ({dockerDf.imagesCount}) · Volumes {formatBytes(dockerDf.volumesBytes)} · Cache {formatBytes(dockerDf.buildCacheBytes)}
+                  </span>
+                </div>
+              )}
             </div>
           )}
 
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={handlePruneDocker}
-            disabled={!isAdmin || busy === 'prune' || !runtime?.dockerConnected}
-          >
-            <Trash2 size={14} /> {busy === 'prune' ? 'Pruning…' : 'Prune Unused Docker Images'}
-          </button>
+          <div className="action-btns">
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={handlePruneDocker}
+              disabled={!isAdmin || busy === 'prune' || !runtime?.dockerConnected}
+            >
+              <Trash2 size={14} /> {busy === 'prune' ? 'Pruning…' : 'Prune Docker Cache'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={handleExportBackup}
+              disabled={!isAdmin || busy === 'backup'}
+            >
+              <Download size={14} /> {busy === 'backup' ? 'Exporting…' : 'Export Backup'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => backupFileRef.current?.click()}
+              disabled={!isAdmin || busy === 'restore'}
+            >
+              <Upload size={14} /> {busy === 'restore' ? 'Restoring…' : 'Restore Backup'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={handleRenewAllSsl}
+              disabled={!isAdmin || busy === 'renew-ssl' || !runtime?.domainSystem?.hasCertbot}
+            >
+              <RefreshCw size={14} /> {busy === 'renew-ssl' ? 'Checking SSL…' : 'Renew SSL'}
+            </button>
+          </div>
+          <input
+            ref={backupFileRef}
+            type="file"
+            accept="application/json"
+            style={{ display: 'none' }}
+            onChange={handleImportBackupFile}
+          />
           <p className="detail-hint">
-            Removes dangling Docker image layers left over from previous builds to free VPS disk space.
+            Reclaim dangling image/build cache, export/restore platform configs as JSON, or trigger Certbot SSL renewal.
           </p>
+        </div>
+
+        <div className="detail-card">
+          <h3 className="detail-card-title" style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
+            <Bell size={14} /> Deployment Notifications
+          </h3>
+          <form onSubmit={handleSaveNotifications}>
+            <div className="form-group">
+              <label className="form-label" htmlFor="notifWebhook">Webhook URL (Discord, Slack, or JSON)</label>
+              <input
+                id="notifWebhook"
+                type="url"
+                className="form-input"
+                value={notifForm.webhookUrl}
+                onChange={(e) => setNotifForm((f) => ({ ...f, webhookUrl: e.target.value }))}
+              />
+            </div>
+
+            <div className="ssl-checkboxes" style={{ marginBottom: '16px' }}>
+              <label className="ssl-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={notifForm.deploySuccess}
+                  onChange={(e) => setNotifForm((f) => ({ ...f, deploySuccess: e.target.checked }))}
+                />
+                <span>Notify on Deployment Succeeded / Rollback</span>
+              </label>
+              <label className="ssl-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={notifForm.deployFailed}
+                  onChange={(e) => setNotifForm((f) => ({ ...f, deployFailed: e.target.checked }))}
+                />
+                <span>Notify on Deployment Failed</span>
+              </label>
+              <label className="ssl-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={notifForm.appUnhealthy}
+                  onChange={(e) => setNotifForm((f) => ({ ...f, appUnhealthy: e.target.checked }))}
+                />
+                <span>Notify on HTTP Health Check Failure</span>
+              </label>
+            </div>
+
+            <div className="action-btns">
+              <button type="submit" className="btn btn-primary" disabled={!isAdmin || busy === 'notif'}>
+                {busy === 'notif' ? 'Saving…' : 'Save Notifications'}
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={handleTestNotification}
+                disabled={!isAdmin || busy === 'notif-test' || !notifForm.webhookUrl.trim()}
+              >
+                <Send size={14} /> {busy === 'notif-test' ? 'Sending…' : 'Send Test Alert'}
+              </button>
+            </div>
+          </form>
         </div>
       </div>
     </div>

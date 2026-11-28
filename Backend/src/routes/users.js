@@ -2,6 +2,7 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { getDb } from '../db/database.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
+import { recordAudit } from '../services/auditService.js';
 
 const router = Router();
 router.use(authenticate);
@@ -73,6 +74,14 @@ router.post('/', async (req, res) => {
       VALUES (${username}, ${hash}, ${role}, ${Boolean(isActive)}, 1)
       RETURNING id, username, role, is_active, last_login_at, created_at
     `;
+    void recordAudit({
+      req,
+      action: 'user.create',
+      targetType: 'user',
+      targetId: rows[0].id,
+      targetName: rows[0].username,
+      details: { role: rows[0].role },
+    });
     return res.status(201).json(rows[0]);
   } catch (err) {
     if (err.code === '23505' || err.message?.includes('unique') || err.message?.includes('duplicate')) {
@@ -148,6 +157,14 @@ router.put('/:id', async (req, res) => {
       WHERE id = ${userId}
       RETURNING id, username, role, is_active, last_login_at, created_at
     `;
+    void recordAudit({
+      req,
+      action: 'user.update',
+      targetType: 'user',
+      targetId: updated[0].id,
+      targetName: updated[0].username,
+      details: { role: updated[0].role, is_active: updated[0].is_active },
+    });
     return res.json(updated[0]);
   } catch (err) {
     if (err.code === '23505' || err.message?.includes('unique') || err.message?.includes('duplicate')) {
@@ -179,6 +196,13 @@ router.delete('/:id', async (req, res) => {
     }
 
     await sql`DELETE FROM users WHERE id = ${userId}`;
+    void recordAudit({
+      req,
+      action: 'user.delete',
+      targetType: 'user',
+      targetId: rows[0].id,
+      targetName: rows[0].username,
+    });
     return res.json({ message: `User '${rows[0].username}' deleted.` });
   } catch (err) {
     console.error('[Users] Delete error:', err.message);

@@ -95,6 +95,13 @@ export function WebSocketProvider({ children }) {
     setLiveLogs([]);
   }, []);
 
+  const send = useCallback((payload) => {
+    const socket = wsRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+    socket.send(JSON.stringify(payload));
+    return true;
+  }, []);
+
   useEffect(() => {
     if (!isAuthenticated || !token) {
       if (wsRef.current) {
@@ -189,7 +196,7 @@ export function WebSocketProvider({ children }) {
 
   return (
     <WebSocketContext.Provider
-      value={{ connected, systemStats, liveLogs, seedLiveLogs, clearLiveLogs, subscribe }}
+      value={{ connected, systemStats, liveLogs, seedLiveLogs, clearLiveLogs, subscribe, send }}
     >
       {children}
     </WebSocketContext.Provider>

@@ -38,18 +38,29 @@ CREATE TABLE IF NOT EXISTS applications (
 -- Ensure optional columns exist on existing deployments of schema
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS github_token TEXT;
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS project_type TEXT DEFAULT 'auto';
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS memory_limit_mb INTEGER;
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS cpu_limit NUMERIC;
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS health_check_path TEXT DEFAULT '';
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS volumes JSONB DEFAULT '[]';
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS health_status TEXT DEFAULT 'unknown';
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS last_health_check TIMESTAMPTZ;
 
 -- Deployments table (deployment history per application)
 CREATE TABLE IF NOT EXISTS deployments (
-  id           SERIAL PRIMARY KEY,
-  app_id       INTEGER     NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
-  status       TEXT        NOT NULL,          -- pending | running | success | failed
-  commit_sha   TEXT,
-  triggered_by TEXT        DEFAULT 'manual',  -- manual | webhook
-  logs         TEXT        DEFAULT '',
-  started_at   TIMESTAMPTZ DEFAULT NOW(),
-  finished_at  TIMESTAMPTZ
+  id               SERIAL PRIMARY KEY,
+  app_id           INTEGER     NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+  status           TEXT        NOT NULL,          -- pending | running | success | failed
+  commit_sha       TEXT,
+  triggered_by     TEXT        DEFAULT 'manual',  -- manual | webhook | rollback
+  image_tag        TEXT,
+  rollback_from_id INTEGER,
+  logs             TEXT        DEFAULT '',
+  started_at       TIMESTAMPTZ DEFAULT NOW(),
+  finished_at      TIMESTAMPTZ
 );
+
+ALTER TABLE deployments ADD COLUMN IF NOT EXISTS image_tag TEXT;
+ALTER TABLE deployments ADD COLUMN IF NOT EXISTS rollback_from_id INTEGER;
 
 -- Connected GitHub accounts (OAuth or Personal Access Token)
 CREATE TABLE IF NOT EXISTS github_connections (
@@ -82,14 +93,53 @@ CREATE TABLE IF NOT EXISTS domains (
 
 -- Dashboard and platform configuration (singleton row id = 1)
 CREATE TABLE IF NOT EXISTS platform_settings (
-  id                     INTEGER     PRIMARY KEY DEFAULT 1,
-  platform_name          TEXT        DEFAULT 'PaaSbyDeep',
-  public_url             TEXT        DEFAULT '',
-  dashboard_domain       TEXT        DEFAULT '',
-  dashboard_ssl_enabled  BOOLEAN     DEFAULT FALSE,
-  dashboard_ssl_expires  TIMESTAMPTZ,
-  certbot_email          TEXT        DEFAULT '',
-  default_memory_mb      INTEGER     DEFAULT 512,
-  max_deployments_retain INTEGER     DEFAULT 20,
-  updated_at             TIMESTAMPTZ DEFAULT NOW()
+  id                       INTEGER     PRIMARY KEY DEFAULT 1,
+  platform_name            TEXT        DEFAULT 'PaaSbyDeep',
+  public_url               TEXT        DEFAULT '',
+  dashboard_domain         TEXT        DEFAULT '',
+  dashboard_ssl_enabled    BOOLEAN     DEFAULT FALSE,
+  dashboard_ssl_expires    TIMESTAMPTZ,
+  certbot_email            TEXT        DEFAULT '',
+  default_memory_mb        INTEGER     DEFAULT 512,
+  max_deployments_retain   INTEGER     DEFAULT 20,
+  notification_webhook_url TEXT        DEFAULT '',
+  notification_events      JSONB       DEFAULT '{"deploy_success":true,"deploy_failed":true,"app_unhealthy":true}',
+  updated_at               TIMESTAMPTZ DEFAULT NOW()
 );
+
+ALTER TABLE platform_settings ADD COLUMN IF NOT EXISTS notification_webhook_url TEXT DEFAULT '';
+ALTER TABLE platform_settings ADD COLUMN IF NOT EXISTS notification_events JSONB DEFAULT '{"deploy_success":true,"deploy_failed":true,"app_unhealthy":true}';
+
+-- One-click managed databases / stateful services
+CREATE TABLE IF NOT EXISTS managed_services (
+  id              SERIAL PRIMARY KEY,
+  name            TEXT UNIQUE NOT NULL,
+  service_type    TEXT NOT NULL,
+  version         TEXT NOT NULL,
+  port            INTEGER NOT NULL,
+  username        TEXT DEFAULT '',
+  password        TEXT NOT NULL,
+  database_name   TEXT DEFAULT '',
+  volume_name     TEXT NOT NULL,
+  container_id    TEXT,
+  status          TEXT DEFAULT 'stopped',
+  memory_limit_mb INTEGER DEFAULT 512,
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Security and operational audit trail
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id          SERIAL PRIMARY KEY,
+  user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  username    TEXT NOT NULL DEFAULT 'system',
+  action      TEXT NOT NULL,
+  target_type TEXT NOT NULL,
+  target_id   TEXT,
+  target_name TEXT,
+  details     JSONB DEFAULT '{}',
+  ip_address  TEXT,
+  created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC);

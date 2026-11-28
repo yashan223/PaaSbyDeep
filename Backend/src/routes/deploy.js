@@ -4,7 +4,13 @@ import { getDb } from '../db/database.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { enqueue } from '../services/deploymentQueue.js';
 import { broadcast } from '../services/ws.js';
-import { getActiveDeploymentLogs, getContainerLogs } from '../services/docker.js';
+import {
+  getActiveDeploymentLogs,
+  getContainerLogs,
+  getContainerStats,
+  rollbackAppToDeployment,
+} from '../services/docker.js';
+import { recordAudit } from '../services/auditService.js';
 
 const router = Router();
 router.use(authenticate);
@@ -59,10 +65,46 @@ router.post('/:id/deploy', requireRole('admin', 'operator'), async (req, res) =>
     if (!rows[0]) return res.status(404).json({ error: 'Application not found.' });
 
     const deploymentId = await enqueue(rows[0].id, 'manual', null, rows[0].name);
+    void recordAudit({
+      req,
+      action: 'app.deploy',
+      targetType: 'application',
+      targetId: rows[0].id,
+      targetName: rows[0].name,
+      details: { deploymentId },
+    });
     return res.json({ message: `Deployment enqueued for '${rows[0].name}'.`, deploymentId });
   } catch (err) {
     console.error('[Deploy] Enqueue error:', err.message);
     return res.status(500).json({ error: 'Failed to enqueue deployment.' });
+  }
+});
+
+router.post('/:id/rollback', requireRole('admin', 'operator'), async (req, res) => {
+  const appId = parseId(req.params.id);
+  const deploymentId = parseId(req.body?.deploymentId ?? req.body?.deployment_id);
+  if (!appId) return res.status(400).json({ error: 'Invalid application ID.' });
+  if (!deploymentId) return res.status(400).json({ error: 'Valid target deploymentId is required.' });
+
+  try {
+    const sql = getDb();
+    const [appRows, depRows] = await Promise.all([
+      sql`SELECT * FROM applications WHERE id = ${appId}`,
+      sql`SELECT * FROM deployments WHERE id = ${deploymentId} AND app_id = ${appId}`,
+    ]);
+    if (!appRows[0]) return res.status(404).json({ error: 'Application not found.' });
+    if (!depRows[0]) return res.status(404).json({ error: 'Target deployment not found for this application.' });
+    if (depRows[0].status !== 'success') {
+      return res.status(400).json({ error: 'Only succeeded deployments can be rolled back to.' });
+    }
+
+    const rollbackDeploymentId = await rollbackAppToDeployment(appRows[0], depRows[0], req.user);
+    return res.json({
+      message: `Rolled back '${appRows[0].name}' to deployment #${deploymentId}.`,
+      deploymentId: rollbackDeploymentId,
+    });
+  } catch (err) {
+    return res.status(400).json({ error: err.message || 'Failed to roll back deployment.' });
   }
 });
 
@@ -84,6 +126,7 @@ router.post('/:id/restart', requireRole('admin', 'operator'), async (req, res) =
     await container.restart();
     await sql`UPDATE applications SET status = 'running', updated_at = NOW() WHERE id = ${app.id}`;
     broadcast({ type: 'app:status', appId: app.id, appName: app.name, status: 'running' });
+    void recordAudit({ req, action: 'app.restart', targetType: 'application', targetId: app.id, targetName: app.name });
     return res.json({ message: `Container for '${app.name}' restarted.` });
   } catch (err) {
     if (err.statusCode === 404) {
@@ -127,6 +170,7 @@ router.post('/:id/stop', requireRole('admin', 'operator'), async (req, res) => {
 
     await sql`UPDATE applications SET status = 'stopped', updated_at = NOW() WHERE id = ${app.id}`;
     broadcast({ type: 'app:status', appId: app.id, appName: app.name, status: 'stopped' });
+    void recordAudit({ req, action: 'app.stop', targetType: 'application', targetId: app.id, targetName: app.name });
     return res.json({ message: `Container for '${app.name}' stopped.` });
   } catch (err) {
     console.error('[Deploy] Stop error:', err.message);
@@ -202,6 +246,23 @@ router.get('/:id/container-logs', async (req, res) => {
   }
 });
 
+router.get('/:id/container-stats', async (req, res) => {
+  const appId = parseId(req.params.id);
+  if (!appId) return res.status(400).json({ error: 'Invalid application ID.' });
+
+  try {
+    const sql = getDb();
+    const rows = await sql`SELECT id, name, container_id, status FROM applications WHERE id = ${appId}`;
+    if (!rows[0]) return res.status(404).json({ error: 'Application not found.' });
+
+    const stats = await getContainerStats(rows[0]);
+    return res.json(stats);
+  } catch (err) {
+    console.error('[Deploy] Container stats error:', err.message);
+    return res.status(500).json({ error: 'Failed to read container stats.' });
+  }
+});
+
 router.get('/:id/deployments', async (req, res) => {
   const appId = parseId(req.params.id);
   if (!appId) return res.status(400).json({ error: 'Invalid application ID.' });
@@ -212,7 +273,7 @@ router.get('/:id/deployments', async (req, res) => {
     if (!rows[0]) return res.status(404).json({ error: 'Application not found.' });
 
     const deployments = await sql`
-      SELECT id, app_id, status, commit_sha, triggered_by, started_at, finished_at
+      SELECT id, app_id, status, commit_sha, triggered_by, image_tag, rollback_from_id, started_at, finished_at
       FROM deployments
       WHERE app_id = ${appId}
       ORDER BY id DESC

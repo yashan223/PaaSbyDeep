@@ -6,6 +6,8 @@ import { authenticate, requireRole } from '../middleware/auth.js';
 import { encryptSecret } from '../utils/crypto.js';
 import { broadcast } from '../services/ws.js';
 import { removeDomainNginxConfig, syncDomainNginxConfig } from '../services/domainManager.js';
+import { getContainerStats } from '../services/docker.js';
+import { recordAudit } from '../services/auditService.js';
 import {
   sanitizeName,
   sanitizePort,
@@ -47,12 +49,88 @@ function serializeApp(app, role = 'admin') {
     }
   }
 
+  let volumes = [];
+  if (Array.isArray(rest.volumes)) {
+    volumes = rest.volumes;
+  } else if (typeof rest.volumes === 'string') {
+    try {
+      const parsedVols = JSON.parse(rest.volumes);
+      if (Array.isArray(parsedVols)) volumes = parsedVols;
+    } catch {
+      volumes = [];
+    }
+  }
+
   return {
     ...rest,
     domains,
+    volumes,
+    cpu_limit: rest.cpu_limit !== null && rest.cpu_limit !== undefined ? Number(rest.cpu_limit) : null,
     env_vars: envVars,
     has_github_token: Boolean(github_token),
   };
+}
+
+function parseVolumesInput(rawVolumes) {
+  if (rawVolumes === undefined || rawVolumes === null || rawVolumes === '') return [];
+  const parsed = typeof rawVolumes === 'string' ? JSON.parse(rawVolumes) : rawVolumes;
+  if (!Array.isArray(parsed)) {
+    throw new Error('volumes must be an array.');
+  }
+  const seenPaths = new Set();
+  const normalized = [];
+  for (const entry of parsed.slice(0, 20)) {
+    if (!entry || typeof entry !== 'object') continue;
+    const name = String(entry.name || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-').slice(0, 40);
+    const containerPath = String(entry.containerPath || entry.container_path || '').trim();
+    if (!name && !containerPath) continue;
+    if (!name || !/^[a-z0-9][a-z0-9_-]*$/.test(name)) {
+      throw new Error('Volume names must use lowercase letters, numbers, dashes, or underscores.');
+    }
+    if (!containerPath.startsWith('/') || containerPath === '/' || containerPath.includes('..') || containerPath.includes(':')) {
+      throw new Error(`Invalid container mount path '${containerPath}'. Must be an absolute path such as /app/data.`);
+    }
+    if (seenPaths.has(containerPath)) {
+      throw new Error(`Duplicate container mount path '${containerPath}'.`);
+    }
+    seenPaths.add(containerPath);
+    normalized.push({ name, containerPath });
+  }
+  return normalized;
+}
+
+function parseResourceOverrides(body) {
+  const rawMem = body?.memory_limit_mb ?? body?.memoryLimitMb;
+  let memoryLimitMb = null;
+  if (rawMem !== undefined && rawMem !== null && rawMem !== '') {
+    const parsedMem = Number.parseInt(rawMem, 10);
+    if (!Number.isInteger(parsedMem) || parsedMem < 128 || parsedMem > 16384) {
+      throw new Error('Memory limit override must be between 128 and 16384 MB.');
+    }
+    memoryLimitMb = parsedMem;
+  }
+
+  const rawCpu = body?.cpu_limit ?? body?.cpuLimit;
+  let cpuLimit = null;
+  if (rawCpu !== undefined && rawCpu !== null && rawCpu !== '') {
+    const parsedCpu = Number.parseFloat(rawCpu);
+    if (!Number.isFinite(parsedCpu) || parsedCpu < 0.1 || parsedCpu > 16) {
+      throw new Error('CPU limit must be between 0.1 and 16 cores.');
+    }
+    cpuLimit = Math.round(parsedCpu * 100) / 100;
+  }
+
+  const rawHealth = body?.health_check_path ?? body?.healthCheckPath;
+  let healthCheckPath = '';
+  if (typeof rawHealth === 'string' && rawHealth.trim()) {
+    const trimmed = rawHealth.trim();
+    if (!trimmed.startsWith('/') || /\s/.test(trimmed) || trimmed.length > 120) {
+      throw new Error('Health check path must start with / (e.g. /health) and contain no spaces.');
+    }
+    healthCheckPath = trimmed;
+  }
+
+  return { memoryLimitMb, cpuLimit, healthCheckPath };
 }
 
 function parseEnvVarsInput(rawEnv) {
@@ -96,6 +174,23 @@ router.get('/', async (req, res) => {
   } catch (err) {
     console.error('[Apps] List error:', err.message);
     return res.status(500).json({ error: 'Failed to fetch applications.' });
+  }
+});
+
+router.get('/stats/summary', async (_req, res) => {
+  try {
+    const sql = getDb();
+    const apps = await sql`SELECT id, name, container_id, status FROM applications WHERE status = 'running'`;
+    const entries = await Promise.all(
+      apps.map(async (app) => {
+        const stats = await getContainerStats(app).catch(() => ({ available: false, running: false }));
+        return [app.id, stats];
+      })
+    );
+    return res.json(Object.fromEntries(entries));
+  } catch (err) {
+    console.error('[Apps] Stats summary error:', err.message);
+    return res.status(500).json({ error: 'Failed to fetch container metrics summary.' });
   }
 });
 
@@ -158,15 +253,40 @@ router.post('/', requireRole('admin', 'operator'), async (req, res) => {
     ? projectTypeInput.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 30) || 'auto'
     : 'auto';
 
+  let volumesArr = [];
+  let overrides;
+  try {
+    volumesArr = parseVolumesInput(req.body.volumes);
+    overrides = parseResourceOverrides(req.body);
+  } catch (cfgErr) {
+    return res.status(400).json({ error: cfgErr.message });
+  }
+
   try {
     const sql = getDb();
     const rows = await sql`
-      INSERT INTO applications (name, repo_url, branch, dockerfile_path, port, env_vars, github_token, project_type)
-      VALUES (${safeName}, ${safeRepoUrl}, ${safeBranch}, ${safeDockerfilePath}, ${safePort}, ${JSON.stringify(envVarsObj)}::jsonb, ${encryptedToken}, ${safeProjectType})
+      INSERT INTO applications (
+        name, repo_url, branch, dockerfile_path, port, env_vars, github_token, project_type,
+        memory_limit_mb, cpu_limit, health_check_path, volumes
+      )
+      VALUES (
+        ${safeName}, ${safeRepoUrl}, ${safeBranch}, ${safeDockerfilePath}, ${safePort},
+        ${JSON.stringify(envVarsObj)}::jsonb, ${encryptedToken}, ${safeProjectType},
+        ${overrides.memoryLimitMb}, ${overrides.cpuLimit}, ${overrides.healthCheckPath},
+        ${JSON.stringify(volumesArr)}::jsonb
+      )
       RETURNING *
     `;
     const created = serializeApp(rows[0]);
     broadcast({ type: 'apps:changed', action: 'created', appId: created.id, appName: created.name });
+    void recordAudit({
+      req,
+      action: 'app.create',
+      targetType: 'application',
+      targetId: created.id,
+      targetName: created.name,
+      details: { branch: created.branch, port: created.port },
+    });
     return res.status(201).json(created);
   } catch (err) {
     if (err.code === '23505' || err.message?.includes('unique') || err.message?.includes('duplicate')) {
@@ -250,10 +370,37 @@ router.put('/:id', requireRole('admin', 'operator'), async (req, res) => {
     let envVarsObj = typeof app.env_vars === 'object' && app.env_vars !== null ? app.env_vars : {};
     if (envVarsInput !== undefined) {
       try {
-        envVarsObj = parseEnvVarsInput(envVarsInput);
+        const parsedNext = parseEnvVarsInput(envVarsInput);
+        const existingEnv = envVarsObj;
+        const merged = {};
+        for (const [k, v] of Object.entries(parsedNext)) {
+          merged[k] = v === '[REDACTED]' && existingEnv[k] !== undefined ? existingEnv[k] : v;
+        }
+        envVarsObj = merged;
       } catch (envErr) {
         return res.status(400).json({ error: envErr.message || 'env_vars must be a valid JSON object.' });
       }
+    }
+
+    let volumesArr = Array.isArray(app.volumes) ? app.volumes : [];
+    let overrides;
+    try {
+      if (req.body.volumes !== undefined) {
+        volumesArr = parseVolumesInput(req.body.volumes);
+      }
+      overrides = parseResourceOverrides({
+        memory_limit_mb: req.body.memory_limit_mb !== undefined || req.body.memoryLimitMb !== undefined
+          ? (req.body.memory_limit_mb ?? req.body.memoryLimitMb)
+          : app.memory_limit_mb,
+        cpu_limit: req.body.cpu_limit !== undefined || req.body.cpuLimit !== undefined
+          ? (req.body.cpu_limit ?? req.body.cpuLimit)
+          : app.cpu_limit,
+        health_check_path: req.body.health_check_path !== undefined || req.body.healthCheckPath !== undefined
+          ? (req.body.health_check_path ?? req.body.healthCheckPath)
+          : app.health_check_path,
+      });
+    } catch (cfgErr) {
+      return res.status(400).json({ error: cfgErr.message });
     }
 
     let encryptedToken = app.github_token;
@@ -272,6 +419,10 @@ router.put('/:id', requireRole('admin', 'operator'), async (req, res) => {
           env_vars = ${JSON.stringify(envVarsObj)}::jsonb,
           github_token = ${encryptedToken},
           project_type = ${safeProjectType},
+          memory_limit_mb = ${overrides.memoryLimitMb},
+          cpu_limit = ${overrides.cpuLimit},
+          health_check_path = ${overrides.healthCheckPath},
+          volumes = ${JSON.stringify(volumesArr)}::jsonb,
           updated_at = NOW()
       WHERE id = ${app.id}
       RETURNING *
@@ -284,6 +435,14 @@ router.put('/:id', requireRole('admin', 'operator'), async (req, res) => {
       }
     }
     broadcast({ type: 'apps:changed', action: 'updated', appId: result.id, appName: result.name });
+    void recordAudit({
+      req,
+      action: 'app.update',
+      targetType: 'application',
+      targetId: result.id,
+      targetName: result.name,
+      details: { branch: result.branch, port: result.port },
+    });
     return res.json(result);
   } catch (err) {
     if (err.code === '23505' || err.message?.includes('unique') || err.message?.includes('duplicate')) {
@@ -330,6 +489,13 @@ router.delete('/:id', requireRole('admin', 'operator'), async (req, res) => {
 
     await sql`DELETE FROM applications WHERE id = ${app.id}`;
     broadcast({ type: 'apps:changed', action: 'deleted', appId: app.id, appName: app.name });
+    void recordAudit({
+      req,
+      action: 'app.delete',
+      targetType: 'application',
+      targetId: app.id,
+      targetName: app.name,
+    });
     return res.json({ message: `Application '${app.name}' deleted.` });
   } catch (err) {
     console.error('[Apps] Delete error:', err.message);

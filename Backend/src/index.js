@@ -7,6 +7,7 @@ import rateLimit from 'express-rate-limit';
 import { initServerLogger } from './services/serverLogger.js';
 import { initDb, closeDb, formatDbError } from './db/database.js';
 import { initWebSocket, closeWebSocket } from './services/ws.js';
+import { startHealthMonitor, stopHealthMonitor } from './services/healthMonitor.js';
 
 initServerLogger();
 import authRoutes from './routes/auth.js';
@@ -18,6 +19,8 @@ import githubRoutes from './routes/github.js';
 import domainsRoutes from './routes/domains.js';
 import settingsRoutes from './routes/settings.js';
 import usersRoutes from './routes/users.js';
+import servicesRoutes from './routes/services.js';
+import auditRoutes from './routes/audit.js';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -79,6 +82,8 @@ app.use('/api/system', systemRoutes);
 app.use('/api/github', githubRoutes);
 app.use('/api/domains', domainsRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/services', servicesRoutes);
+app.use('/api/audit', auditRoutes);
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -110,9 +115,11 @@ async function bootstrap() {
   });
 
   initWebSocket(server);
+  startHealthMonitor();
 
   function shutdown(signal) {
     console.log(`[Server] Received ${signal}. Shutting down gracefully...`);
+    stopHealthMonitor();
     closeWebSocket();
     server.close(async () => {
       await closeDb().catch(() => {});

@@ -12,6 +12,8 @@ import EditApp from './pages/EditApp';
 import GitHubConnect from './pages/GitHubConnect';
 import LiveLogs from './pages/LiveLogs';
 import Domains from './pages/Domains';
+import Services from './pages/Services';
+import AuditLogs from './pages/AuditLogs';
 import Users from './pages/Users';
 import Settings from './pages/Settings';
 
@@ -38,9 +40,11 @@ function AppRoutes() {
         <Route path="apps/:id" element={<AppDetail />} />
         <Route path="apps/:id/edit" element={<EditApp />} />
         <Route path="domains" element={<Domains />} />
+        <Route path="services" element={<Services />} />
         <Route path="logs" element={<LiveLogs />} />
         <Route path="github" element={<GitHubConnect />} />
         <Route path="users" element={<Users />} />
+        <Route path="audit" element={<AuditLogs />} />
         <Route path="settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

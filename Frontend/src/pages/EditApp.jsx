@@ -1,24 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { getApp, updateApp } from '../api/apps';
-
-function envObjToText(obj) {
-  if (!obj || typeof obj !== 'object') return '';
-  return Object.entries(obj).map(([k, v]) => `${k}=${v}`).join('\n');
-}
-
-function envTextToObj(text) {
-  const obj = {};
-  text.split('\n').forEach((line) => {
-    const eq = line.indexOf('=');
-    if (eq > 0) {
-      const key = line.slice(0, eq).trim();
-      const val = line.slice(eq + 1).trim();
-      if (key) obj[key] = val;
-    }
-  });
-  return obj;
-}
+import { getServices } from '../api/services';
+import EnvVarsEditor from '../components/EnvVarsEditor';
+import VolumesEditor from '../components/VolumesEditor';
 
 function EditApp() {
   const { id } = useParams();
@@ -30,24 +15,40 @@ function EditApp() {
     branch: 'main',
     dockerfilePath: 'Dockerfile',
     port: '',
-    envVars: '',
+    memoryLimitMb: '',
+    cpuLimit: '',
+    healthCheckPath: '',
+    envVars: {},
+    volumes: [],
   });
+  const [services, setServices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
     let active = true;
+    getServices()
+      .then((list) => {
+        if (active) setServices(Array.isArray(list) ? list : []);
+      })
+      .catch(() => {});
+
     getApp(id)
       .then((app) => {
         if (!active) return;
+        const envObj = app.env_vars && typeof app.env_vars === 'object' ? app.env_vars : {};
         setForm({
           name: app.name || '',
           repoUrl: app.repo_url || app.repoUrl || app.repository || '',
           branch: app.branch || 'main',
           dockerfilePath: app.dockerfile_path || app.dockerfilePath || 'Dockerfile',
           port: app.port ? String(app.port) : '',
-          envVars: envObjToText(app.env_vars || app.envVars || app.env),
+          memoryLimitMb: app.memory_limit_mb ? String(app.memory_limit_mb) : '',
+          cpuLimit: app.cpu_limit !== null && app.cpu_limit !== undefined ? String(app.cpu_limit) : '',
+          healthCheckPath: app.health_check_path || '',
+          envVars: envObj,
+          volumes: Array.isArray(app.volumes) ? app.volumes : [],
         });
       })
       .catch((err) => {
@@ -85,7 +86,11 @@ function EditApp() {
         branch: form.branch.trim() || 'main',
         dockerfile_path: form.dockerfilePath.trim() || 'Dockerfile',
         port: Number(form.port),
-        env_vars: form.envVars.trim() ? envTextToObj(form.envVars) : {},
+        env_vars: form.envVars || {},
+        volumes: (form.volumes || []).filter((v) => v.name?.trim() && v.containerPath?.trim()),
+        memory_limit_mb: form.memoryLimitMb ? Number(form.memoryLimitMb) : null,
+        cpu_limit: form.cpuLimit ? Number(form.cpuLimit) : null,
+        health_check_path: form.healthCheckPath.trim(),
       };
       await updateApp(id, payload);
       navigate(`/apps/${id}`);
@@ -170,16 +175,61 @@ function EditApp() {
             </div>
           </div>
 
+          <div className="form-row">
+            <div className="form-group">
+              <label className="form-label" htmlFor="memoryLimitMb">Memory Limit (MB) <span className="form-optional">(optional)</span></label>
+              <input
+                id="memoryLimitMb"
+                type="number"
+                className="form-input"
+                value={form.memoryLimitMb}
+                onChange={set('memoryLimitMb')}
+                min="128"
+                max="16384"
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label" htmlFor="cpuLimit">CPU Limit (Cores) <span className="form-optional">(optional)</span></label>
+              <input
+                id="cpuLimit"
+                type="number"
+                step="0.1"
+                className="form-input"
+                value={form.cpuLimit}
+                onChange={set('cpuLimit')}
+                min="0.1"
+                max="16"
+              />
+            </div>
+          </div>
+
           <div className="form-group">
-            <label className="form-label" htmlFor="envVars">Environment Variables</label>
-            <textarea
-              id="envVars"
-              className="form-textarea"
-              value={form.envVars}
-              onChange={set('envVars')}
-              rows={6}
+            <label className="form-label" htmlFor="healthCheckPath">HTTP Health Check Path <span className="form-optional">(optional)</span></label>
+            <input
+              id="healthCheckPath"
+              type="text"
+              className="form-input"
+              value={form.healthCheckPath}
+              onChange={set('healthCheckPath')}
             />
-            <span className="form-hint">One KEY=VALUE per line</span>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Persistent Volumes <span className="form-optional">(optional)</span></label>
+            <VolumesEditor
+              volumes={form.volumes}
+              onChange={(volumes) => setForm((f) => ({ ...f, volumes }))}
+            />
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Environment Variables</label>
+            <EnvVarsEditor
+              value={form.envVars}
+              services={services}
+              onChange={(envVars) => setForm((f) => ({ ...f, envVars }))}
+            />
           </div>
 
           <div className="form-actions">

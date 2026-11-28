@@ -9,9 +9,11 @@ const pageTitles = {
   '/apps': 'Applications',
   '/apps/new': 'Add Application',
   '/domains': 'Domains & SSL',
+  '/services': 'Managed Services',
   '/logs': 'Live Logs',
   '/github': 'GitHub Integration',
   '/users': 'User Management',
+  '/audit': 'Audit Trail',
   '/settings': 'Management Settings',
 };
 
