@@ -198,9 +198,9 @@ run_uninstall() {
     log_ok "PM2 service removed."
   fi
 
-  # 2. Remove PaaSbyDeep Docker containers and images
+  # 2. Remove PaaSbyDeep Docker containers, images, volumes & network
   if command -v docker >/dev/null 2>&1; then
-    log_info "Removing PaaSbyDeep Docker containers and images..."
+    log_info "Removing PaaSbyDeep Docker containers, images, volumes & network..."
     mapfile -t PAAS_CONTAINERS < <(docker ps -aq --filter "name=^paasbydeeep-" 2>/dev/null || true)
     if (( ${#PAAS_CONTAINERS[@]} > 0 )); then
       docker rm -f "${PAAS_CONTAINERS[@]}" >/dev/null 2>&1 || true
@@ -210,7 +210,14 @@ run_uninstall() {
     if (( ${#PAAS_IMAGES[@]} > 0 )); then
       docker rmi -f "${PAAS_IMAGES[@]}" >/dev/null 2>&1 || true
     fi
-    log_ok "Docker containers and images cleaned up."
+
+    mapfile -t PAAS_VOLUMES < <(docker volume ls -q --filter "name=^paasbydeeep-" 2>/dev/null || true)
+    if (( ${#PAAS_VOLUMES[@]} > 0 )); then
+      docker volume rm -f "${PAAS_VOLUMES[@]}" >/dev/null 2>&1 || true
+    fi
+
+    docker network rm paasbydeeep-net >/dev/null 2>&1 || true
+    log_ok "Docker containers, images, volumes & network cleaned up."
   fi
 
   # 3. Remove Nginx site configurations & logs BEFORE deleting Certbot certs
@@ -442,6 +449,13 @@ fi
 GITHUB_CLIENT_ID=""
 GITHUB_CLIENT_SECRET=""
 
+PREPULL_IMAGES="false"
+read -r -p "Pre-pull Docker images for managed DBs & MinIO S3 (PostgreSQL, MongoDB, Silo/MinIO, Redis, MySQL)? [y/N]: " prepull_ans
+prepull_ans="${prepull_ans:-N}"
+if [[ "${prepull_ans,,}" == "y" || "${prepull_ans,,}" == "yes" ]]; then
+  PREPULL_IMAGES="true"
+fi
+
 CONFIGURE_UFW="false"
 if command -v ufw >/dev/null 2>&1; then
   read -r -p "Allow ports 22, 80, 443 in UFW firewall? [Y/n]: " ufw_ans
@@ -482,7 +496,17 @@ if ! command -v docker >/dev/null 2>&1; then
   fi
 fi
 systemctl enable --now docker
-log_ok "Docker Engine ready."
+docker network inspect paasbydeeep-net >/dev/null 2>&1 || docker network create --driver bridge paasbydeeep-net >/dev/null
+log_ok "Docker Engine and network 'paasbydeeep-net' ready."
+
+if [[ "$PREPULL_IMAGES" == "true" ]]; then
+  log_info "Pre-pulling managed database & MinIO S3 Docker images..."
+  for svc_img in postgres:16-alpine mongo:7 pgsty/silo:latest redis:7-alpine mysql:8.4; do
+    log_info "Pulling ${svc_img}..."
+    docker pull "$svc_img" >/dev/null || log_warn "Could not pre-pull ${svc_img} now (will pull on demand)."
+  done
+  log_ok "Managed service image pre-pull step complete."
+fi
 
 if ! command -v pm2 >/dev/null 2>&1; then
   log_info "Installing PM2 process manager globally..."
@@ -490,8 +514,22 @@ if ! command -v pm2 >/dev/null 2>&1; then
 fi
 log_ok "PM2 ready."
 
-JWT_SECRET="$(openssl rand -hex 32)"
-WEBHOOK_SECRET="$(openssl rand -hex 32)"
+EXISTING_ENV="${INSTALL_DIR}/Backend/.env"
+JWT_SECRET=""
+WEBHOOK_SECRET=""
+if [[ -f "$EXISTING_ENV" ]]; then
+  JWT_SECRET="$(grep -E '^JWT_SECRET=' "$EXISTING_ENV" | tail -n 1 | cut -d= -f2- | tr -d '\r' || true)"
+  WEBHOOK_SECRET="$(grep -E '^WEBHOOK_SECRET=' "$EXISTING_ENV" | tail -n 1 | cut -d= -f2- | tr -d '\r' || true)"
+  if [[ -n "$JWT_SECRET" ]]; then
+    log_info "Preserving existing JWT_SECRET from ${EXISTING_ENV} so saved encrypted credentials remain readable."
+  fi
+fi
+if [[ -z "$JWT_SECRET" ]]; then
+  JWT_SECRET="$(openssl rand -hex 32)"
+fi
+if [[ -z "$WEBHOOK_SECRET" ]]; then
+  WEBHOOK_SECRET="$(openssl rand -hex 32)"
+fi
 if [[ "$ADMIN_PASS_AUTOGEN" == "true" ]]; then
   ADMIN_PASSWORD="$(openssl rand -base64 14 | tr -dc 'A-Za-z0-9' | head -c 16)"
 fi
@@ -709,7 +747,7 @@ server {
         proxy_cache_bypass \$http_upgrade;
         proxy_read_timeout 300s;
         proxy_connect_timeout 60s;
-        client_max_body_size 1m;
+        client_max_body_size 10m;
     }
 
     access_log /var/log/nginx/paasbydeeep.access.log;
@@ -829,6 +867,10 @@ echo "  Server Public IP : ${SERVER_IP} (use for custom app DNS A records)"
 echo "  Nginx Status     : $([[ "$NGINX_STARTED" == "true" ]] && echo "Running" || echo "Port 80/443 conflict — see warning above")"
 echo "  Backend Health   : $([[ "$HEALTH_OK" == "true" ]] && echo "OK (port ${APP_PORT})" || echo "Check: pm2 logs paasbydeeep-backend")"
 echo "  Database Mode    : $([[ "$DB_CHOICE" == "1" ]] && echo "Docker PostgreSQL (${PG_DB_NAME} @ 127.0.0.1:${DASH_DB_PORT})" || echo "External / Neon DB")"
+echo "  Docker Network   : paasbydeeep-net (apps + managed DBs & MinIO S3)"
+if [[ "$PREPULL_IMAGES" == "true" ]]; then
+  echo "  Managed Images   : Pre-cached (postgres:16-alpine, mongo:7, pgsty/silo:latest, redis:7-alpine, mysql:8.4)"
+fi
 echo "  Admin Username   : ${ADMIN_USERNAME}"
 if [[ "$ADMIN_PASS_AUTOGEN" == "true" ]]; then
   echo "  Admin Password   : ${ADMIN_PASSWORD}  (auto-generated — save this!)"
@@ -837,6 +879,9 @@ else
 fi
 echo "  Webhook Secret   : ${WEBHOOK_SECRET}"
 echo "  Install Path     : ${INSTALL_DIR}"
+if [[ "$CONFIGURE_UFW" == "true" ]]; then
+  echo "  Firewall Note    : If accessing raw app/DB/MinIO IP:ports remotely, open needed ports (e.g. ufw allow 9000/tcp)"
+fi
 echo ""
 echo "  Useful CLI commands:"
 echo "    sudo paasbydeeep update       # Pull latest updates, migrate, rebuild & restart"
