@@ -57,13 +57,47 @@ router.get('/dns-check', async (req, res) => {
   }
 });
 
+async function fetchDomainById(sql, domainId) {
+  const rows = await sql`
+    SELECT d.*,
+      COALESCE(a.name, s.name) AS app_name,
+      COALESCE(
+        CASE
+          WHEN d.service_id IS NOT NULL AND d.service_target = 'console' THEN s.console_port
+          WHEN d.service_id IS NOT NULL THEN s.port
+          ELSE a.port
+        END,
+        a.port
+      ) AS app_port,
+      COALESCE(a.status, s.status) AS app_status,
+      s.service_type
+    FROM domains d
+    LEFT JOIN applications a ON a.id = d.app_id
+    LEFT JOIN managed_services s ON s.id = d.service_id
+    WHERE d.id = ${domainId}
+  `;
+  return rows[0] || null;
+}
+
 router.get('/', async (_req, res) => {
   try {
     const sql = getDb();
     const rows = await sql`
-      SELECT d.*, a.name AS app_name, a.port AS app_port, a.status AS app_status
+      SELECT d.*,
+        COALESCE(a.name, s.name) AS app_name,
+        COALESCE(
+          CASE
+            WHEN d.service_id IS NOT NULL AND d.service_target = 'console' THEN s.console_port
+            WHEN d.service_id IS NOT NULL THEN s.port
+            ELSE a.port
+          END,
+          a.port
+        ) AS app_port,
+        COALESCE(a.status, s.status) AS app_status,
+        s.service_type
       FROM domains d
-      JOIN applications a ON a.id = d.app_id
+      LEFT JOIN applications a ON a.id = d.app_id
+      LEFT JOIN managed_services s ON s.id = d.service_id
       ORDER BY d.created_at DESC
     `;
     return res.json(rows);
@@ -95,9 +129,13 @@ router.get('/app/:appId', async (req, res) => {
 
 router.post('/', requireRole('admin', 'operator'), async (req, res) => {
   const appId = parseId(req.body?.appId ?? req.body?.app_id);
+  const serviceId = parseId(req.body?.serviceId ?? req.body?.service_id);
+  const rawTarget = String(req.body?.serviceTarget ?? req.body?.service_target ?? 's3').toLowerCase();
   const safeDomain = sanitizeDomain(req.body?.domain);
 
-  if (!appId) return res.status(400).json({ error: 'Valid application ID is required.' });
+  if (!appId && !serviceId) {
+    return res.status(400).json({ error: 'Valid application or MinIO service selection is required.' });
+  }
   if (!safeDomain) {
     return res.status(400).json({
       error: 'Invalid domain name. Enter a valid domain such as app.example.com (no protocol or port).',
@@ -106,17 +144,42 @@ router.post('/', requireRole('admin', 'operator'), async (req, res) => {
 
   try {
     const sql = getDb();
-    const appRows = await sql`SELECT id, name, port FROM applications WHERE id = ${appId}`;
-    if (!appRows[0]) return res.status(404).json({ error: 'Application not found.' });
-    const app = appRows[0];
+    let targetName = '';
+    let targetPort = null;
+    let serviceTarget = 'app';
+    let isS3Proxy = false;
+
+    if (serviceId) {
+      if (!['s3', 'console'].includes(rawTarget)) {
+        return res.status(400).json({ error: "Invalid service target. Use 's3' or 'console'." });
+      }
+      const svcRows = await sql`SELECT id, name, service_type, port, console_port FROM managed_services WHERE id = ${serviceId}`;
+      if (!svcRows[0]) return res.status(404).json({ error: 'Managed service not found.' });
+      if (svcRows[0].service_type !== 'minio') {
+        return res.status(400).json({ error: 'HTTP/HTTPS custom domains are only supported for MinIO object storage services.' });
+      }
+      targetName = `${svcRows[0].name}-${rawTarget}`;
+      targetPort = rawTarget === 'console' ? svcRows[0].console_port : svcRows[0].port;
+      serviceTarget = rawTarget;
+      isS3Proxy = true;
+      if (!targetPort) {
+        return res.status(400).json({ error: `Service '${svcRows[0].name}' does not have a ${rawTarget} port configured.` });
+      }
+    } else {
+      const appRows = await sql`SELECT id, name, port FROM applications WHERE id = ${appId}`;
+      if (!appRows[0]) return res.status(404).json({ error: 'Application not found.' });
+      targetName = appRows[0].name;
+      targetPort = appRows[0].port;
+    }
 
     let nginxConfigured = false;
     let nginxWarning = null;
     try {
       const syncResult = await syncDomainNginxConfig({
         domain: safeDomain,
-        port: app.port,
-        appName: app.name,
+        port: targetPort,
+        appName: targetName,
+        isS3Proxy,
       });
       nginxConfigured = Boolean(syncResult.configured);
       nginxWarning = syncResult.warning || null;
@@ -129,8 +192,8 @@ router.post('/', requireRole('admin', 'operator'), async (req, res) => {
     const sslStatus = localCert.exists ? 'active' : 'none';
 
     const inserted = await sql`
-      INSERT INTO domains (app_id, domain, ssl_enabled, ssl_status, cert_expires_at, nginx_configured)
-      VALUES (${app.id}, ${safeDomain}, ${sslEnabled}, ${sslStatus}, ${localCert.expiresAt}, ${nginxConfigured})
+      INSERT INTO domains (app_id, service_id, service_target, domain, ssl_enabled, ssl_status, cert_expires_at, nginx_configured)
+      VALUES (${appId || null}, ${serviceId || null}, ${serviceTarget}, ${safeDomain}, ${sslEnabled}, ${sslStatus}, ${localCert.expiresAt}, ${nginxConfigured})
       RETURNING *
     `;
 
@@ -138,20 +201,21 @@ router.post('/', requireRole('admin', 'operator'), async (req, res) => {
 
     const record = {
       ...inserted[0],
-      app_name: app.name,
-      app_port: app.port,
+      app_name: targetName,
+      app_port: targetPort,
       ...(dnsCheck ? { dns: dnsCheck } : {}),
       ...(nginxWarning ? { nginxWarning } : {}),
     };
 
-    broadcast({ type: 'domains:changed', action: 'created', appId: app.id, domain: safeDomain });
+    broadcast({ type: 'domains:changed', action: 'created', appId: appId || null, serviceId: serviceId || null, domain: safeDomain });
+    if (serviceId) broadcast({ type: 'services:changed', action: 'domain', serviceId });
     void recordAudit({
       req,
       action: 'domain.create',
       targetType: 'domain',
       targetId: inserted[0].id,
       targetName: safeDomain,
-      details: { appName: app.name },
+      details: serviceId ? { serviceId, serviceTarget } : { appName: targetName },
     });
     return res.status(201).json(record);
   } catch (err) {
@@ -169,20 +233,15 @@ router.get('/:id/nginx-config', async (req, res) => {
 
   try {
     const sql = getDb();
-    const rows = await sql`
-      SELECT d.*, a.name AS app_name, a.port AS app_port
-      FROM domains d
-      JOIN applications a ON a.id = d.app_id
-      WHERE d.id = ${domainId}
-    `;
-    if (!rows[0]) return res.status(404).json({ error: 'Domain not found.' });
-    const row = rows[0];
+    const row = await fetchDomainById(sql, domainId);
+    if (!row) return res.status(404).json({ error: 'Domain not found.' });
 
     const config = generateNginxConfig({
       domain: row.domain,
       port: row.app_port,
       appName: row.app_name,
       forceHttpsBlock: false,
+      isS3Proxy: Boolean(row.service_id),
     });
     const fileName = getNginxFileName(row.domain);
 
@@ -205,19 +264,14 @@ router.post('/:id/nginx-sync', requireRole('admin', 'operator'), async (req, res
 
   try {
     const sql = getDb();
-    const rows = await sql`
-      SELECT d.*, a.name AS app_name, a.port AS app_port
-      FROM domains d
-      JOIN applications a ON a.id = d.app_id
-      WHERE d.id = ${domainId}
-    `;
-    if (!rows[0]) return res.status(404).json({ error: 'Domain not found.' });
-    const row = rows[0];
+    const row = await fetchDomainById(sql, domainId);
+    if (!row) return res.status(404).json({ error: 'Domain not found.' });
 
     const syncRes = await syncDomainNginxConfig({
       domain: row.domain,
       port: row.app_port,
       appName: row.app_name,
+      isS3Proxy: Boolean(row.service_id),
     });
 
     const updated = await sql`
@@ -227,7 +281,7 @@ router.post('/:id/nginx-sync', requireRole('admin', 'operator'), async (req, res
       RETURNING *
     `;
 
-    broadcast({ type: 'domains:changed', action: 'synced', appId: row.app_id, domain: row.domain });
+    broadcast({ type: 'domains:changed', action: 'synced', appId: row.app_id, serviceId: row.service_id, domain: row.domain });
 
     if (!syncRes.configured) {
       return res.status(400).json({
@@ -265,20 +319,14 @@ router.post('/:id/ssl', requireRole('admin', 'operator'), async (req, res) => {
 
   try {
     const sql = getDb();
-    const rows = await sql`
-      SELECT d.*, a.name AS app_name, a.port AS app_port
-      FROM domains d
-      JOIN applications a ON a.id = d.app_id
-      WHERE d.id = ${domainId}
-    `;
-    if (!rows[0]) return res.status(404).json({ error: 'Domain not found.' });
-    const row = rows[0];
+    const row = await fetchDomainById(sql, domainId);
+    if (!row) return res.status(404).json({ error: 'Domain not found.' });
 
     await sql`
       UPDATE domains SET ssl_status = 'pending', last_cert_error = NULL, updated_at = NOW()
       WHERE id = ${domainId}
     `;
-    broadcast({ type: 'domains:changed', action: 'ssl-pending', appId: row.app_id, domain: row.domain });
+    broadcast({ type: 'domains:changed', action: 'ssl-pending', appId: row.app_id, serviceId: row.service_id, domain: row.domain });
 
     try {
       const result = await installCertbotSsl({
@@ -288,6 +336,7 @@ router.post('/:id/ssl', requireRole('admin', 'operator'), async (req, res) => {
         email: safeEmail,
         redirect,
         forceRenew,
+        isS3Proxy: Boolean(row.service_id),
       });
 
       const updated = await sql`
@@ -303,7 +352,8 @@ router.post('/:id/ssl', requireRole('admin', 'operator'), async (req, res) => {
         RETURNING *
       `;
 
-      broadcast({ type: 'domains:changed', action: 'ssl-active', appId: row.app_id, domain: row.domain });
+      broadcast({ type: 'domains:changed', action: 'ssl-active', appId: row.app_id, serviceId: row.service_id, domain: row.domain });
+      if (row.service_id) broadcast({ type: 'services:changed', action: 'ssl', serviceId: row.service_id });
       console.log(`[SSL] Certbot installed certificate for ${row.domain}`);
       void recordAudit({
         req,
@@ -328,7 +378,7 @@ router.post('/:id/ssl', requireRole('admin', 'operator'), async (req, res) => {
             updated_at = NOW()
         WHERE id = ${domainId}
       `;
-      broadcast({ type: 'domains:changed', action: 'ssl-failed', appId: row.app_id, domain: row.domain });
+      broadcast({ type: 'domains:changed', action: 'ssl-failed', appId: row.app_id, serviceId: row.service_id, domain: row.domain });
       console.error(`[SSL] Certbot failed for ${row.domain}:`, certErr.message);
 
       return res.status(400).json({

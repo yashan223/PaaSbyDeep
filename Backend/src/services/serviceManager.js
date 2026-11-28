@@ -11,7 +11,7 @@ import {
   ensureContainerOnSharedNetwork,
   SHARED_DOCKER_NETWORK,
 } from './docker.js';
-import { getServerPublicIps } from './domainManager.js';
+import { getServerPublicIps, removeDomainNginxConfig } from './domainManager.js';
 import {
   isValidBucketName,
   listMinioBuckets,
@@ -81,6 +81,40 @@ export const SERVICE_TEMPLATES = {
 
 function generatePassword(length = 24) {
   return crypto.randomBytes(Math.ceil((length * 3) / 4)).toString('base64url').slice(0, length);
+}
+
+function validateServicePassword(rawPassword) {
+  const pass = String(rawPassword ?? '');
+  if (!pass || pass.length < 8 || pass.length > 128) {
+    throw new Error('Password must be between 8 and 128 characters.');
+  }
+  if (/[\r\n\0]/.test(pass)) {
+    throw new Error('Password cannot contain newline or null characters.');
+  }
+  return pass;
+}
+
+async function runContainerExec(container, cmd, env = []) {
+  const exec = await container.exec({
+    AttachStdout: true,
+    AttachStderr: true,
+    Tty: false,
+    Env: env,
+    Cmd: cmd,
+  });
+  const stream = await exec.start({ hijack: true, stdin: false });
+  const chunks = [];
+  await new Promise((resolve, reject) => {
+    stream.on('data', (d) => chunks.push(d));
+    stream.on('end', resolve);
+    stream.on('error', reject);
+  });
+  const inspect = await exec.inspect();
+  const output = demuxDockerLogBuffer(Buffer.concat(chunks), false).trim();
+  if (inspect.ExitCode !== 0) {
+    throw new Error(output || `Container command exited with code ${inspect.ExitCode}.`);
+  }
+  return output;
 }
 
 function pullImage(imageName) {
@@ -215,6 +249,7 @@ export function serializeService(service, publicHost = 'localhost', role = 'admi
 
   return {
     ...rest,
+    domains: Array.isArray(service.domains) ? service.domains : [],
     public_access: publicAccess,
     public_host: publicHost,
     console_url: consoleUrl,
@@ -352,11 +387,18 @@ async function createAndStartServiceContainer(service, plainPassword) {
 
 export async function listManagedServices(role = 'admin') {
   const sql = getDb();
-  const [rows, ips] = await Promise.all([
+  const [rows, domainRows, ips] = await Promise.all([
     sql`SELECT * FROM managed_services ORDER BY created_at DESC`,
+    sql`SELECT id, service_id, domain, ssl_enabled, service_target FROM domains WHERE service_id IS NOT NULL ORDER BY created_at ASC`.catch(() => []),
     getServerPublicIps().catch(() => ({ publicIpv4: null, localIpv4: 'localhost' })),
   ]);
   const publicHost = ips.publicIpv4 || ips.localIpv4 || 'localhost';
+  const domainsByService = new Map();
+  for (const d of domainRows) {
+    const arr = domainsByService.get(d.service_id) || [];
+    arr.push(d);
+    domainsByService.set(d.service_id, arr);
+  }
 
   // Refresh live container status safely in parallel
   const hydrated = await Promise.all(rows.map(async (row) => {
@@ -382,7 +424,11 @@ export async function listManagedServices(role = 'admin') {
       }
     } catch {
     }
-    return serializeService({ ...row, status, last_error: lastError }, publicHost, role);
+    return serializeService(
+      { ...row, status, last_error: lastError, domains: domainsByService.get(row.id) || [] },
+      publicHost,
+      role
+    );
   }));
   return hydrated;
 }
@@ -392,6 +438,7 @@ export async function createManagedService({
   serviceType,
   port,
   databaseName,
+  password,
   memoryLimitMb = 512,
   publicAccess = false,
   autoStart = true,
@@ -413,12 +460,14 @@ export async function createManagedService({
   }
 
   const isPublic = Boolean(publicAccess);
+  const plainPassword = password !== undefined && password !== null && String(password) !== ''
+    ? validateServicePassword(password)
+    : generatePassword(24);
   const sql = getDb();
   const assignedPort = await allocateServicePort(sql, port, tpl.defaultPort);
   const consolePort = tpl.defaultConsolePort
     ? await allocateServicePort(sql, null, tpl.defaultConsolePort, [assignedPort])
     : null;
-  const plainPassword = generatePassword(24);
   const encryptedPassword = encryptSecret(plainPassword);
   const volumeName = `paasbydeeep-svc-vol-${safeName}`;
   const cleanDbName = safeType === 'redis' || safeType === 'minio'
@@ -594,6 +643,126 @@ export async function setManagedServiceAccess(id, publicAccess, role = 'admin') 
   return serializeService(service, publicHost, role);
 }
 
+async function applyEnginePasswordChange(service, found, oldPass, nextPass, encryptedNext) {
+  const type = service.service_type;
+  const isRunning = Boolean(found?.info?.State?.Running);
+
+  if (type === 'redis' || type === 'minio') {
+    if (isRunning) {
+      return createAndStartServiceContainer({ ...service, password: encryptedNext }, nextPass);
+    }
+    if (found) {
+      try {
+        await found.container.remove({ force: true });
+      } catch {
+      }
+      return null;
+    }
+    return service.container_id;
+  }
+
+  if (!found && !service.container_id) {
+    return null;
+  }
+  if (!isRunning) {
+    throw new Error(`Start '${service.name}' first so the new password can be updated inside its running database.`);
+  }
+
+  const user = service.username || 'paas';
+  if (type === 'postgres') {
+    const safeIdent = user.replace(/"/g, '');
+    const escapedPass = nextPass.replace(/'/g, "''");
+    await runContainerExec(
+      found.container,
+      ['psql', '-U', user, '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-c', `ALTER USER "${safeIdent}" WITH PASSWORD '${escapedPass}';`],
+      [`PGPASSWORD=${oldPass}`]
+    );
+  } else if (type === 'mysql') {
+    const safeUser = user.replace(/'/g, '');
+    const escapedPass = nextPass.replace(/\\/g, '\\\\').replace(/'/g, "''");
+    const sqlStmt = `ALTER USER IF EXISTS 'root'@'localhost' IDENTIFIED BY '${escapedPass}'; ALTER USER IF EXISTS 'root'@'%' IDENTIFIED BY '${escapedPass}'; ALTER USER IF EXISTS '${safeUser}'@'%' IDENTIFIED BY '${escapedPass}'; FLUSH PRIVILEGES;`;
+    await runContainerExec(found.container, ['mysql', '-u', 'root', '-e', sqlStmt], [`MYSQL_PWD=${oldPass}`]);
+  } else if (type === 'mongodb') {
+    await runContainerExec(
+      found.container,
+      [
+        'mongosh', '--quiet', '--username', user, '--password', oldPass, '--authenticationDatabase', 'admin',
+        '--eval', 'db.getSiblingDB("admin").changeUserPassword(process.env.MONGO_TARGET_USER, process.env.MONGO_NEW_PASS)',
+      ],
+      [`MONGO_TARGET_USER=${user}`, `MONGO_NEW_PASS=${nextPass}`]
+    );
+  }
+  return found.info.Id;
+}
+
+/**
+ * Rotate a managed service's password both in the engine/container and in encrypted storage,
+ * and optionally refresh env vars on attached applications referencing this service.
+ */
+export async function changeManagedServicePassword(id, { password, generateRandom = false, syncApps = true }, role = 'admin') {
+  const nextPass = generateRandom ? generatePassword(24) : validateServicePassword(password);
+  const encryptedNext = encryptSecret(nextPass);
+
+  const sql = getDb();
+  const rows = await sql`SELECT * FROM managed_services WHERE id = ${id}`;
+  if (!rows[0]) throw new Error('Managed service not found.');
+  const service = rows[0];
+  const oldPass = decryptSecret(service.password) || '';
+
+  const found = await findServiceContainer(service).catch(() => null);
+  const nextContainerId = await applyEnginePasswordChange(service, found, oldPass, nextPass, encryptedNext);
+
+  const updatedRows = await sql`
+    UPDATE managed_services
+    SET password = ${encryptedNext}, container_id = ${nextContainerId}, last_error = '', updated_at = NOW()
+    WHERE id = ${id}
+    RETURNING *
+  `;
+  const updated = updatedRows[0];
+
+  const tpl = SERVICE_TEMPLATES[updated.service_type] || {};
+  const containerHost = getContainerName(updated);
+  const newInternalUrl = buildConnectionString(updated, containerHost, tpl.containerPort || updated.port, { maskSecret: false });
+
+  const syncedApps = [];
+  if (syncApps) {
+    const appRows = await sql`SELECT id, name, env_vars FROM applications`;
+    for (const app of appRows) {
+      const envObj = typeof app.env_vars === 'object' && app.env_vars !== null ? { ...app.env_vars } : {};
+      let changed = false;
+
+      if (updated.service_type === 'minio') {
+        const matchesEndpoint = Object.values(envObj).some((v) => String(v || '').includes(containerHost));
+        if (matchesEndpoint && envObj.S3_SECRET_KEY !== nextPass) {
+          envObj.S3_SECRET_KEY = nextPass;
+          changed = true;
+        }
+      } else {
+        for (const [k, v] of Object.entries(envObj)) {
+          if (typeof v === 'string' && v.includes(containerHost) && v !== newInternalUrl) {
+            envObj[k] = newInternalUrl;
+            changed = true;
+          }
+        }
+      }
+
+      if (changed) {
+        await sql`UPDATE applications SET env_vars = ${JSON.stringify(envObj)}::jsonb, updated_at = NOW() WHERE id = ${app.id}`;
+        syncedApps.push(app.name);
+        broadcast({ type: 'apps:changed', action: 'updated', appId: app.id, appName: app.name });
+      }
+    }
+  }
+
+  const ips = await getServerPublicIps().catch(() => ({ publicIpv4: null, localIpv4: 'localhost' }));
+  const publicHost = ips.publicIpv4 || ips.localIpv4 || 'localhost';
+  broadcast({ type: 'services:changed', action: 'password', serviceId: updated.id });
+  return {
+    service: serializeService(updated, publicHost, role),
+    syncedApps,
+  };
+}
+
 export async function getManagedServiceLogs(id, tail = 200) {
   const sql = getDb();
   const rows = await sql`SELECT * FROM managed_services WHERE id = ${id}`;
@@ -640,7 +809,15 @@ export async function deleteManagedService(id, removeVolume = false) {
     }
   }
 
+  const serviceDomains = await sql`SELECT domain FROM domains WHERE service_id = ${id}`.catch(() => []);
+  for (const dom of serviceDomains) {
+    await removeDomainNginxConfig(dom.domain).catch(() => {});
+  }
+
   await sql`DELETE FROM managed_services WHERE id = ${id}`;
+  if (serviceDomains.length > 0) {
+    broadcast({ type: 'domains:changed', action: 'deleted', serviceId: service.id });
+  }
   broadcast({ type: 'services:changed', action: 'deleted', serviceId: service.id });
   return service;
 }

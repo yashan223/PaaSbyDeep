@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Database, Plus, Play, RotateCcw, Square, Trash2, Terminal, Link2, Copy, Check, Eye, EyeOff, X, RefreshCw,
-  HardDrive, ExternalLink, Lock, Globe,
+  HardDrive, ExternalLink, Lock, Globe, KeyRound,
 } from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
 import LogViewer from '../components/LogViewer';
@@ -11,7 +12,7 @@ import useApps from '../hooks/useApps';
 import { useAuth } from '../context/AuthContext';
 import { useWebSocket } from '../context/WebSocketContext';
 import {
-  getServiceTemplates, getServices, controlService, setServiceAccess, getServiceLogs,
+  getServiceTemplates, getServices, controlService, setServiceAccess, changeServicePassword, getServiceLogs,
   attachServiceToApp, deleteService, listServiceBuckets,
 } from '../api/services';
 import { DEFAULT_SERVICE_TEMPLATES } from '../utils/serviceTemplates';
@@ -40,6 +41,13 @@ function Services() {
   const [attachBusy, setAttachBusy] = useState(false);
 
   const [bucketsTarget, setBucketsTarget] = useState(null);
+
+  const [passwordTarget, setPasswordTarget] = useState(null);
+  const [nextPassword, setNextPassword] = useState('');
+  const [showNextPassword, setShowNextPassword] = useState(false);
+  const [syncAppsOnPass, setSyncAppsOnPass] = useState(true);
+  const [passwordBusy, setPasswordBusy] = useState(false);
+  const [passwordError, setPasswordError] = useState('');
 
   const [logsTarget, setLogsTarget] = useState(null);
   const [serviceLogs, setServiceLogs] = useState('');
@@ -195,6 +203,48 @@ function Services() {
     }).catch(() => {});
   };
 
+  const openPasswordModal = (svc) => {
+    setPasswordTarget(svc);
+    setNextPassword('');
+    setShowNextPassword(false);
+    setSyncAppsOnPass(true);
+    setPasswordError('');
+  };
+
+  const fillGeneratedPassword = () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*_-';
+    const bytes = new Uint8Array(24);
+    window.crypto.getRandomValues(bytes);
+    setNextPassword(Array.from(bytes, (b) => chars[b % chars.length]).join(''));
+    setShowNextPassword(true);
+  };
+
+  const handlePasswordSubmit = async (e) => {
+    e.preventDefault();
+    if (!passwordTarget) return;
+    if (!nextPassword || nextPassword.length < 8 || nextPassword.length > 128) {
+      setPasswordError('New password must be between 8 and 128 characters.');
+      return;
+    }
+    setPasswordBusy(true);
+    setPasswordError('');
+    setError('');
+    setNotice('');
+    try {
+      const res = await changeServicePassword(passwordTarget.id, {
+        password: nextPassword,
+        syncApps: syncAppsOnPass,
+      });
+      setNotice(res.message || `Password updated for '${passwordTarget.name}'.`);
+      setPasswordTarget(null);
+      await loadAll();
+    } catch (err) {
+      setPasswordError(err?.response?.data?.error || 'Failed to change password.');
+    } finally {
+      setPasswordBusy(false);
+    }
+  };
+
   return (
     <div className="page">
       <div className="page-header">
@@ -265,9 +315,19 @@ function Services() {
                   <div className="service-conn-box">
                     <div className="code-block-header">
                       <span className="form-hint">
-                        Internal Docker URL ({svc.suggested_env_key})
+                        Backend App Connection (Container-Only · {svc.suggested_env_key})
                       </span>
                       <div style={{ display: 'flex', gap: '4px' }}>
+                        {canManage && (
+                          <button
+                            type="button"
+                            className="btn btn-xs btn-secondary"
+                            onClick={() => openPasswordModal(svc)}
+                            title="Change password"
+                          >
+                            <KeyRound size={11} /> Password
+                          </button>
+                        )}
                         {!isMinio && canManage && (
                           <button
                             type="button"
@@ -283,17 +343,17 @@ function Services() {
                           className="btn btn-xs btn-secondary"
                           onClick={() => copyValue(`int-${svc.id}`, svc.internal_url)}
                           disabled={!canManage}
-                          title="Copy Internal Docker URL"
+                          title={`Copy ${svc.suggested_env_key}`}
                         >
                           {copiedKey === `int-${svc.id}` ? <Check size={11} /> : <Copy size={11} />}
                         </button>
                       </div>
                     </div>
-                    <code className="webhook-url">
+                    <code className="webhook-url service-internal-code">
                       {revealed ? svc.internal_url : svc.internal_url.replace(/:([^:@]+)@/, ':••••••••@')}
                     </code>
                     <span className="form-hint" style={{ display: 'block', marginTop: '6px' }}>
-                      For backend apps on this VPS only (internal Docker network — not openable in browsers).
+                      Internal Docker network address for backend apps on this VPS — cannot be opened in a browser.
                     </span>
                   </div>
 
@@ -301,10 +361,19 @@ function Services() {
                     <div className="code-block-header">
                       <span className="form-hint">
                         {svc.public_access
-                          ? (isMinio ? 'Public S3 Endpoint (HTTP · Unencrypted)' : 'Public External URL (Raw TCP)')
-                          : 'Private Access & SSH Tunnel'}
+                          ? (isMinio ? 'Public IP Access (HTTP)' : 'Public External URL (Raw TCP)')
+                          : (isMinio ? 'Browser / SSH Access' : 'Private Access & SSH Tunnel')}
                       </span>
                       <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                        {isMinio && canManage && (
+                          <Link
+                            to="/domains"
+                            className="btn btn-xs btn-secondary"
+                            title="Attach a custom domain with SSL for browser & HTTPS S3 access"
+                          >
+                            + Domain
+                          </Link>
+                        )}
                         {canManage && (
                           <button
                             type="button"
@@ -327,15 +396,41 @@ function Services() {
                         </button>
                       </div>
                     </div>
-                    <code className="webhook-url">
+                    {isMinio && Array.isArray(svc.domains) && svc.domains.length > 0 && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '8px' }}>
+                        {svc.domains.map((dom) => {
+                          const proto = dom.ssl_enabled ? 'https' : 'http';
+                          return (
+                            <div key={dom.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                              <a
+                                href={`${proto}://${dom.domain}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="app-access-link"
+                              >
+                                <Globe size={11} /> {proto}://{dom.domain} <ExternalLink size={10} />
+                              </a>
+                              <span className="project-type-pill">
+                                {dom.service_target === 'console' ? 'Console' : 'S3 API'}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    <code className={svc.public_access ? 'webhook-url' : 'webhook-url service-internal-code'}>
                       {svc.public_access
                         ? (revealed ? svc.external_url : svc.external_url.replace(/:([^:@]+)@/, ':••••••••@'))
                         : (svc.ssh_tunnel_cmd || svc.external_url)}
                     </code>
                     <span className="form-hint" style={{ display: 'block', marginTop: '6px' }}>
                       {svc.public_access
-                        ? 'Bound on 0.0.0.0 (unencrypted). Use Make Private to close public port access.'
-                        : `Bound to 127.0.0.1:${svc.port}. Run SSH tunnel locally to reach http://localhost:${isMinio ? (svc.console_port || svc.port) : svc.port} securely.`}
+                        ? (isMinio
+                            ? `Console UI opens at http://${svc.public_host}:${svc.console_port || 9001} (unencrypted IP). For HTTPS, add a + Domain.`
+                            : 'Bound on 0.0.0.0 (unencrypted). Use Make Private to close public port access.')
+                        : (isMinio
+                            ? `Open Console in browser: add + Domain for HTTPS, click Make Public for IP, or run SSH tunnel above for http://localhost:${svc.console_port || 9001}.`
+                            : `Bound to 127.0.0.1:${svc.port}. Run SSH tunnel locally to reach 127.0.0.1:${svc.port} securely.`)}
                     </span>
                   </div>
 
@@ -612,6 +707,85 @@ function Services() {
         canManage={canManage}
         onClose={() => setBucketsTarget(null)}
       />
+
+      {passwordTarget && (
+        <div className="modal-overlay" onClick={() => setPasswordTarget(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <KeyRound size={16} /> Change Password — {passwordTarget.name}
+              </h3>
+              <button className="modal-close" onClick={() => setPasswordTarget(null)} aria-label="Close">
+                <X size={16} />
+              </button>
+            </div>
+            <form onSubmit={handlePasswordSubmit}>
+              <div className="modal-body">
+                {passwordError && (
+                  <div className="alert alert-error" style={{ marginBottom: '12px' }}>{passwordError}</div>
+                )}
+                <p style={{ marginBottom: '12px' }}>
+                  {passwordTarget.service_type === 'redis' || passwordTarget.service_type === 'minio'
+                    ? 'Updates the secret and recreates running containers while preserving all persistent data.'
+                    : 'Applies the new password inside the running database engine and updates encrypted credentials.'}
+                </p>
+
+                <div className="form-group">
+                  <div className="code-block-header">
+                    <label className="form-label" htmlFor="svc-new-password" style={{ marginBottom: 0 }}>
+                      New Password *
+                    </label>
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-secondary"
+                      onClick={fillGeneratedPassword}
+                    >
+                      <RefreshCw size={11} /> Generate
+                    </button>
+                  </div>
+                  <div className="input-with-icon">
+                    <input
+                      id="svc-new-password"
+                      type={showNextPassword ? 'text' : 'password'}
+                      className="form-input"
+                      value={nextPassword}
+                      onChange={(e) => setNextPassword(e.target.value)}
+                      autoComplete="new-password"
+                      autoFocus
+                    />
+                    <button
+                      type="button"
+                      className="input-icon-btn"
+                      onClick={() => setShowNextPassword((s) => !s)}
+                      aria-label={showNextPassword ? 'Hide password' : 'Show password'}
+                    >
+                      {showNextPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                    </button>
+                  </div>
+                  <span className="form-hint">8–128 characters.</span>
+                </div>
+
+                <label className="ssl-checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={syncAppsOnPass}
+                    onChange={(e) => setSyncAppsOnPass(e.target.checked)}
+                  />
+                  <span>Auto-update connection URL / S3_SECRET_KEY on attached apps</span>
+                </label>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setPasswordTarget(null)}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary" disabled={passwordBusy}>
+                  <KeyRound size={14} /> {passwordBusy ? 'Updating…' : 'Update Password'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

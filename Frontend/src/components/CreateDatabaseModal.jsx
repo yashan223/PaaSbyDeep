@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Database, Plus, X } from 'lucide-react';
+import { Database, Eye, EyeOff, Plus, X } from 'lucide-react';
 import { createService, getServiceTemplates } from '../api/services';
 import { DEFAULT_SERVICE_TEMPLATES, sortServiceTemplates } from '../utils/serviceTemplates';
 
@@ -9,10 +9,12 @@ function CreateDatabaseModal({ isOpen, onClose, onCreated }) {
     serviceType: 'postgres',
     name: '',
     databaseName: 'appdb',
+    password: '',
     port: '',
     memoryLimitMb: '512',
     publicAccess: false,
   });
+  const [showPassword, setShowPassword] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
 
@@ -43,6 +45,10 @@ function CreateDatabaseModal({ isOpen, onClose, onCreated }) {
       setError('Database name / identifier is required.');
       return;
     }
+    if (form.password && (form.password.length < 8 || form.password.length > 128)) {
+      setError('Initial password must be between 8 and 128 characters (or leave blank to auto-generate).');
+      return;
+    }
     setCreating(true);
     try {
       const res = await createService({
@@ -50,6 +56,7 @@ function CreateDatabaseModal({ isOpen, onClose, onCreated }) {
         serviceType: form.serviceType,
         port: form.port ? Number(form.port) : undefined,
         databaseName: form.databaseName.trim(),
+        password: form.password || undefined,
         memoryLimitMb: Number(form.memoryLimitMb) || 512,
         publicAccess: form.publicAccess,
       });
@@ -57,10 +64,12 @@ function CreateDatabaseModal({ isOpen, onClose, onCreated }) {
         serviceType: 'postgres',
         name: '',
         databaseName: 'appdb',
+        password: '',
         port: '',
         memoryLimitMb: '512',
         publicAccess: false,
       });
+      setShowPassword(false);
       onCreated?.(res);
       onClose?.();
     } catch (err) {
@@ -159,6 +168,31 @@ function CreateDatabaseModal({ isOpen, onClose, onCreated }) {
                   max={16384}
                 />
               </div>
+            </div>
+
+            <div className="form-group" style={{ marginTop: '14px', marginBottom: 0 }}>
+              <label className="form-label" htmlFor="modal-db-password">
+                Password <span className="form-optional">(auto-generated if blank)</span>
+              </label>
+              <div className="input-with-icon">
+                <input
+                  id="modal-db-password"
+                  type={showPassword ? 'text' : 'password'}
+                  className="form-input"
+                  value={form.password}
+                  onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
+                  autoComplete="new-password"
+                />
+                <button
+                  type="button"
+                  className="input-icon-btn"
+                  onClick={() => setShowPassword((s) => !s)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                </button>
+              </div>
+              <span className="form-hint">Minimum 8 characters when set manually; leaves random 24-char secret if blank.</span>
             </div>
 
             <label className="ssl-checkbox-label" style={{ marginTop: '14px' }}>

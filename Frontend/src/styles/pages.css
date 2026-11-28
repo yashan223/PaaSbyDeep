@@ -892,6 +892,10 @@
   color: var(--text-primary);
 }
 
+.service-internal-code {
+  color: var(--text-primary);
+}
+
 .service-access-pill {
   display: inline-flex;
   align-items: center;

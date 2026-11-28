@@ -76,10 +76,12 @@ CREATE TABLE IF NOT EXISTS github_connections (
   updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Custom domains and Certbot SSL certificates per application
+-- Custom domains and Certbot SSL certificates per application or MinIO service
 CREATE TABLE IF NOT EXISTS domains (
   id               SERIAL PRIMARY KEY,
-  app_id           INTEGER     NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+  app_id           INTEGER     REFERENCES applications(id) ON DELETE CASCADE,
+  service_id       INTEGER     REFERENCES managed_services(id) ON DELETE CASCADE,
+  service_target   TEXT        DEFAULT 'app', -- app | s3 | console
   domain           TEXT        UNIQUE NOT NULL,
   ssl_enabled      BOOLEAN     DEFAULT FALSE,
   ssl_status       TEXT        DEFAULT 'none', -- none | pending | active | failed
@@ -90,6 +92,9 @@ CREATE TABLE IF NOT EXISTS domains (
   created_at       TIMESTAMPTZ DEFAULT NOW(),
   updated_at       TIMESTAMPTZ DEFAULT NOW()
 );
+
+ALTER TABLE domains ALTER COLUMN app_id DROP NOT NULL;
+ALTER TABLE domains ADD COLUMN IF NOT EXISTS service_target TEXT DEFAULT 'app';
 
 -- Dashboard and platform configuration (singleton row id = 1)
 CREATE TABLE IF NOT EXISTS platform_settings (
@@ -134,6 +139,7 @@ CREATE TABLE IF NOT EXISTS managed_services (
 ALTER TABLE managed_services ADD COLUMN IF NOT EXISTS console_port INTEGER;
 ALTER TABLE managed_services ADD COLUMN IF NOT EXISTS last_error TEXT DEFAULT '';
 ALTER TABLE managed_services ADD COLUMN IF NOT EXISTS public_access BOOLEAN DEFAULT FALSE;
+ALTER TABLE domains ADD COLUMN IF NOT EXISTS service_id INTEGER REFERENCES managed_services(id) ON DELETE CASCADE;
 
 CREATE TABLE IF NOT EXISTS storage_buckets (
   id          SERIAL PRIMARY KEY,

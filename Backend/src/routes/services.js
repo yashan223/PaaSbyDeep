@@ -9,6 +9,7 @@ import {
   createManagedService,
   controlManagedService,
   setManagedServiceAccess,
+  changeManagedServicePassword,
   getManagedServiceLogs,
   deleteManagedService,
   serializeService,
@@ -45,7 +46,7 @@ router.get('/', async (req, res) => {
 });
 
 router.post('/', requireRole('admin', 'operator'), async (req, res) => {
-  const { name, serviceType, service_type, port, databaseName, database_name, memoryLimitMb, memory_limit_mb, publicAccess, public_access, autoStart } = req.body || {};
+  const { name, serviceType, service_type, port, databaseName, database_name, password, memoryLimitMb, memory_limit_mb, publicAccess, public_access, autoStart } = req.body || {};
   try {
     const result = await createManagedService(
       {
@@ -53,6 +54,7 @@ router.post('/', requireRole('admin', 'operator'), async (req, res) => {
         serviceType: serviceType ?? service_type,
         port,
         databaseName: databaseName ?? database_name,
+        password,
         memoryLimitMb: memoryLimitMb ?? memory_limit_mb ?? 512,
         publicAccess: Boolean(publicAccess ?? public_access),
         autoStart: autoStart !== false,
@@ -241,6 +243,40 @@ router.post('/:id/access', requireRole('admin', 'operator'), async (req, res) =>
     return res.json(updated);
   } catch (err) {
     return res.status(400).json({ error: err.message || 'Failed to update service network access.' });
+  }
+});
+
+router.post('/:id/password', requireRole('admin', 'operator'), async (req, res) => {
+  const serviceId = parseId(req.params.id);
+  if (!serviceId) return res.status(400).json({ error: 'Invalid service ID.' });
+
+  try {
+    const result = await changeManagedServicePassword(
+      serviceId,
+      {
+        password: req.body?.password,
+        generateRandom: Boolean(req.body?.generateRandom),
+        syncApps: req.body?.syncApps !== false,
+      },
+      req.user?.role
+    );
+    void recordAudit({
+      req,
+      action: 'service.password_change',
+      targetType: 'service',
+      targetId: result.service.id,
+      targetName: result.service.name,
+      details: { syncedApps: result.syncedApps },
+    });
+    const appMsg = result.syncedApps.length > 0
+      ? ` Updated env vars in: ${result.syncedApps.join(', ')} (redeploy apps to apply).`
+      : '';
+    return res.json({
+      ...result,
+      message: `Password updated for '${result.service.name}'.${appMsg}`,
+    });
+  } catch (err) {
+    return res.status(400).json({ error: err.message || 'Failed to change service password.' });
   }
 });
 

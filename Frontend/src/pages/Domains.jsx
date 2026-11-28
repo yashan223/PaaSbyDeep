@@ -19,12 +19,14 @@ import {
   renewAllSsl,
   deleteDomain,
 } from '../api/domains';
+import { getServices } from '../api/services';
 
 function Domains() {
   const { apps, fetchApps } = useApps();
   const { subscribe } = useWebSocket();
 
   const [domains, setDomains] = useState([]);
+  const [services, setServices] = useState([]);
   const [sysStatus, setSysStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [appId, setAppId] = useState('');
@@ -39,12 +41,19 @@ function Domains() {
   const [configModalDomain, setConfigModalDomain] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
 
-  const effectiveAppId = appId || (apps[0] ? String(apps[0].id) : '');
+  const minioServices = services.filter((s) => s.service_type === 'minio');
+  const effectiveAppId = appId
+    || (apps[0] ? String(apps[0].id) : minioServices[0] ? `svc:${minioServices[0].id}:console` : '');
 
   const loadAll = useCallback(async () => {
     try {
-      const [domList, sys] = await Promise.all([getDomains(), getDomainSystemStatus()]);
+      const [domList, sys, svcList] = await Promise.all([
+        getDomains(),
+        getDomainSystemStatus(),
+        getServices().catch(() => []),
+      ]);
       setDomains(Array.isArray(domList) ? domList : []);
+      setServices(Array.isArray(svcList) ? svcList : []);
       setSysStatus(sys);
     } catch (err) {
       setError(err?.response?.data?.error || 'Failed to load domains.');
@@ -56,10 +65,11 @@ function Domains() {
   useEffect(() => {
     void fetchApps();
     let active = true;
-    Promise.all([getDomains(), getDomainSystemStatus()])
-      .then(([domList, sys]) => {
+    Promise.all([getDomains(), getDomainSystemStatus(), getServices().catch(() => [])])
+      .then(([domList, sys, svcList]) => {
         if (!active) return;
         setDomains(Array.isArray(domList) ? domList : []);
+        setServices(Array.isArray(svcList) ? svcList : []);
         setSysStatus(sys);
       })
       .catch((err) => {
@@ -73,7 +83,7 @@ function Domains() {
 
   useEffect(() => {
     return subscribe((msg) => {
-      if (msg.type === 'domains:changed' || msg.type === 'apps:changed') {
+      if (msg.type === 'domains:changed' || msg.type === 'apps:changed' || msg.type === 'services:changed') {
         void loadAll();
       }
     });
@@ -82,7 +92,7 @@ function Domains() {
   const handleAddDomain = async (e) => {
     e.preventDefault();
     if (!effectiveAppId) {
-      setError('Select an application first.');
+      setError('Select an application or storage service first.');
       return;
     }
     if (!domainInput.trim()) {
@@ -94,7 +104,13 @@ function Domains() {
     setError('');
     setNotice('');
     try {
-      const res = await createDomain({ appId: Number(effectiveAppId), domain: domainInput.trim() });
+      const payload = effectiveAppId.startsWith('svc:')
+        ? (() => {
+            const [, svcId, svcTarget] = effectiveAppId.split(':');
+            return { serviceId: Number(svcId), serviceTarget: svcTarget, domain: domainInput.trim() };
+          })()
+        : { appId: Number(effectiveAppId), domain: domainInput.trim() };
+      const res = await createDomain(payload);
       setDomainInput('');
       const targetIp = res.dns?.expectedIpv4 || res.dns?.fallbackLocalIpv4;
       const dnsSuffix = res.dns
@@ -202,26 +218,44 @@ function Domains() {
 
       <div className="detail-card" style={{ marginBottom: '24px' }}>
         <h3 className="detail-card-title">Assign Custom Domain</h3>
-        {apps.length === 0 ? (
+        {apps.length === 0 && minioServices.length === 0 ? (
           <p className="detail-hint">
-            Create an application first before attaching a domain.{' '}
+            Create an application or MinIO storage first before attaching a domain.{' '}
             <Link to="/apps/new">Create application</Link>.
           </p>
         ) : (
           <form className="domain-add-form" onSubmit={handleAddDomain}>
             <div className="domain-add-field">
-              <label className="form-label" htmlFor="domain-app">Application</label>
+              <label className="form-label" htmlFor="domain-app">Application / MinIO</label>
               <select
                 id="domain-app"
                 className="form-input"
                 value={effectiveAppId}
                 onChange={(e) => setAppId(e.target.value)}
               >
-                {apps.map((a) => (
-                  <option key={a.id} value={String(a.id)}>
-                    {a.name} (:{a.port})
-                  </option>
-                ))}
+                {apps.length > 0 && (
+                  <optgroup label="Applications">
+                    {apps.map((a) => (
+                      <option key={a.id} value={String(a.id)}>
+                        {a.name} (:{a.port})
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {minioServices.length > 0 && (
+                  <optgroup label="Object Storage (MinIO HTTPS Proxy)">
+                    {minioServices.map((s) => (
+                      <option key={`console-${s.id}`} value={`svc:${s.id}:console`}>
+                        {s.name} — Web Console (:{s.console_port || 9001})
+                      </option>
+                    ))}
+                    {minioServices.map((s) => (
+                      <option key={`s3-${s.id}`} value={`svc:${s.id}:s3`}>
+                        {s.name} — S3 API (:{s.port})
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
             </div>
             <div className="domain-add-field domain-add-field--wide">
@@ -256,7 +290,7 @@ function Domains() {
               <thead>
                 <tr>
                   <th>Domain</th>
-                  <th>Application</th>
+                  <th>Target</th>
                   <th>Nginx</th>
                   <th>SSL (Certbot)</th>
                   <th>Expires</th>
@@ -280,10 +314,22 @@ function Domains() {
                         </a>
                       </td>
                       <td>
-                        <Link to={`/apps/${d.app_id}`} className="table-link">
-                          {d.app_name}
-                        </Link>
-                        <span className="form-hint" style={{ marginLeft: '6px' }}>:{d.app_port}</span>
+                        {d.service_id ? (
+                          <>
+                            <Link to="/databases" className="table-link">{d.app_name}</Link>
+                            <span className="project-type-pill" style={{ marginLeft: '6px' }}>
+                              {d.service_target === 'console' ? 'Console' : 'S3 API'}
+                            </span>
+                            <span className="form-hint" style={{ marginLeft: '6px' }}>:{d.app_port}</span>
+                          </>
+                        ) : (
+                          <>
+                            <Link to={`/apps/${d.app_id}`} className="table-link">
+                              {d.app_name}
+                            </Link>
+                            <span className="form-hint" style={{ marginLeft: '6px' }}>:{d.app_port}</span>
+                          </>
+                        )}
                       </td>
                       <td>
                         <span className={`status-badge ${d.nginx_configured ? 'status-badge--running' : 'status-badge--stopped'}`}>

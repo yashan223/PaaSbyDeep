@@ -12,6 +12,9 @@ export const controlService = (id, action) =>
 export const setServiceAccess = (id, publicAccess) =>
   client.post(`/services/${id}/access`, { publicAccess }).then((r) => r.data);
 
+export const changeServicePassword = (id, payload) =>
+  client.post(`/services/${id}/password`, payload).then((r) => r.data);
+
 export const getServiceLogs = (id, tail = 200) =>
   client.get(`/services/${id}/logs`, { params: { tail } }).then((r) => r.data);
 

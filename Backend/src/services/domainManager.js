@@ -127,7 +127,7 @@ export function readLocalCertInfo(domain) {
  * Generate an Nginx reverse-proxy configuration for a domain and upstream localhost port.
  * Includes HTTPS server block automatically when local Let's Encrypt cert files exist.
  */
-export function generateNginxConfig({ domain, port, appName = 'app', forceHttpsBlock = false }) {
+export function generateNginxConfig({ domain, port, appName = 'app', forceHttpsBlock = false, isS3Proxy = false }) {
   const safeDomain = sanitizeDomain(domain);
   const safePort = sanitizePort(port);
   if (!safeDomain) throw new Error('Invalid domain name.');
@@ -135,7 +135,9 @@ export function generateNginxConfig({ domain, port, appName = 'app', forceHttpsB
 
   const certInfo = readLocalCertInfo(safeDomain);
   const includeHttps = forceHttpsBlock || certInfo.exists;
-  const headerComment = `# Managed by PaaSbyDeep for application: ${String(appName).replace(/[\r\n]/g, '')}`;
+  const headerComment = `# Managed by PaaSbyDeep for ${isS3Proxy ? 'object storage' : 'application'}: ${String(appName).replace(/[\r\n]/g, '')}`;
+  const maxBodySize = isS3Proxy ? '0' : '50m';
+  const extraDirectives = isS3Proxy ? '    ignore_invalid_headers off;\n    proxy_buffering off;\n' : '';
 
   const proxyLocation = `    location / {
         proxy_pass http://127.0.0.1:${safePort};
@@ -158,8 +160,8 @@ server {
     listen [::]:80;
     server_name ${safeDomain};
 
-    client_max_body_size 50m;
-
+    client_max_body_size ${maxBodySize};
+${extraDirectives}
 ${proxyLocation}
 }
 `;
@@ -187,9 +189,8 @@ server {
 
     ssl_certificate /etc/letsencrypt/live/${safeDomain}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${safeDomain}/privkey.pem;
-${optionsSslLine}${dhParamLine}
-    client_max_body_size 50m;
-
+${optionsSslLine}${dhParamLine}    client_max_body_size ${maxBodySize};
+${extraDirectives}
 ${proxyLocation}
 }
 `;
@@ -342,13 +343,13 @@ export async function getDomainSystemStatus() {
 /**
  * Write and enable the Nginx site config for a domain, test via `nginx -t`, and reload Nginx.
  */
-export async function syncDomainNginxConfig({ domain, port, appName }) {
+export async function syncDomainNginxConfig({ domain, port, appName, isS3Proxy = false }) {
   const safeDomain = sanitizeDomain(domain);
   const safePort = sanitizePort(port);
   if (!safeDomain) throw new Error('Invalid domain name.');
   if (!safePort) throw new Error('Invalid application port.');
 
-  const configContent = generateNginxConfig({ domain: safeDomain, port: safePort, appName });
+  const configContent = generateNginxConfig({ domain: safeDomain, port: safePort, appName, isS3Proxy });
   const fileName = getNginxFileName(safeDomain);
   const availablePath = join(NGINX_SITES_AVAILABLE, fileName);
   const enabledPath = join(NGINX_SITES_ENABLED, fileName);
@@ -462,7 +463,7 @@ export async function removeDomainNginxConfig(domain) {
 /**
  * Install or renew a Let's Encrypt SSL certificate using Certbot's Nginx plugin.
  */
-export async function installCertbotSsl({ domain, port, appName, email, redirect = true, forceRenew = false }) {
+export async function installCertbotSsl({ domain, port, appName, email, redirect = true, forceRenew = false, isS3Proxy = false }) {
   const safeDomain = sanitizeDomain(domain);
   const safePort = sanitizePort(port);
   const safeEmail = sanitizeEmail(email || process.env.CERTBOT_EMAIL);
@@ -485,7 +486,7 @@ export async function installCertbotSsl({ domain, port, appName, email, redirect
     throw new Error('Nginx is not installed on this server. Install Nginx before issuing certificates with Certbot.');
   }
 
-  const syncRes = await syncDomainNginxConfig({ domain: safeDomain, port: safePort, appName });
+  const syncRes = await syncDomainNginxConfig({ domain: safeDomain, port: safePort, appName, isS3Proxy });
   if (!syncRes.configured) {
     throw new Error(syncRes.warning || 'Nginx configuration could not be activated on this host.');
   }
